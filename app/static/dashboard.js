@@ -131,7 +131,12 @@ async function sendChatMessage(message) {
   setVoiceStatus("Befehl wird gesendet.", "");
 
   try {
-    const response = await postJson("/chat", { message: trimmed });
+    let response;
+    try {
+      response = await postJson("/assistant/chat", { message: trimmed, confirm: false });
+    } catch (assistantError) {
+      response = await postJson("/chat", { message: trimmed });
+    }
     const answer = extractChatAnswer(response);
     elements.jarvisAnswer.textContent = answer;
     setVoiceStatus("Antwort empfangen.", "");

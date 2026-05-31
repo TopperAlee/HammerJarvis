@@ -78,6 +78,49 @@ Die Sprachsteuerung nutzt die Web Speech API des Browsers.
 Falls die Spracherkennung nicht verfügbar ist, verwende Chrome oder Edge.
 Es gibt in v0.2 noch kein Wake Word und keinen Always-Listening-Modus.
 
+## Hammer Jarvis Agent v0.3
+
+Der neue Agent-Orchestrator ist ueber diesen lokalen Endpunkt erreichbar:
+
+```text
+POST http://127.0.0.1:8000/assistant/chat
+```
+
+`/chat` bleibt als regelbasierter Bestandsendpunkt erhalten.
+`/assistant/chat` nutzt eine Tool Registry und bereitet Hammer Jarvis auf mehrere Werkzeugbereiche vor.
+
+- Smart Home und EcoFlow nutzen echte lokale Home-Assistant-Daten.
+- E-Mail und Kalender sind in v0.3 sichere Mock-Werkzeuge.
+- Eine echte Gmail-, Outlook- oder Kalenderverbindung kommt spaeter.
+- Schreibaktionen brauchen eine Bestaetigung.
+- RED-Aktionen wie echtes E-Mail-Senden oder PLC-Schreiben sind blockiert.
+- Die optionale LLM-Anbindung ist vorbereitet. Ohne `OPENAI_API_KEY` laeuft der Agent im lokalen `rule_based_fallback`.
+
+## Produktivitaets-Integrationen
+
+Hammer Jarvis v0.3 enthaelt eine lokale Provider-Architektur fuer E-Mail- und Kalenderfunktionen.
+Die Provider sind vorbereitet, aber noch nicht mit echten Konten verbunden.
+
+- Gmail: vorbereitet fuer die Gmail API, OAuth ist noch nicht aktiv.
+- Outlook Mail: vorbereitet fuer Microsoft Graph, OAuth ist noch nicht aktiv.
+- Outlook Kalender: vorbereitet fuer Microsoft Graph, OAuth ist noch nicht aktiv.
+- Google Kalender: vorbereitet fuer die Google Calendar API, OAuth ist noch nicht aktiv.
+- TimeTree: nur als Import-/Export- oder ICS-Quelle vorbereitet, weil die oeffentliche Entwickler-API nicht mehr regulaer verfuegbar ist.
+
+Diese lokalen Endpunkte zeigen den aktuellen Integrationsstatus:
+
+```text
+GET http://127.0.0.1:8000/assistant/providers
+GET http://127.0.0.1:8000/assistant/calendar/today
+GET http://127.0.0.1:8000/assistant/email/search?q=example
+GET http://127.0.0.1:8000/assistant/timetree/status
+```
+
+E-Mail-Suche und Kalenderabfragen liefern aktuell sichere Mock-Antworten.
+Echte E-Mails werden nicht gesendet.
+Kalendereintraege werden noch nicht real erstellt.
+Schreibende Aktionen bleiben bestaetigungspflichtig oder blockiert, bis die jeweiligen Provider sicher konfiguriert sind.
+
 ## Testen mit `/docs`
 
 Oeffne `http://127.0.0.1:8000/docs` im Browser.

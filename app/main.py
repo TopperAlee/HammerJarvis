@@ -9,8 +9,12 @@ from pydantic import BaseModel, Field
 
 from app.agent.core import HammerJarvisCore
 from app.agent.permissions import classify_action
+from app.assistant.orchestrator import AssistantOrchestrator
 from app.logging_utils.audit import write_audit_log
 from app.tools.home_assistant import HomeAssistantTool
+from app.tools.productivity.calendar_service import CalendarService
+from app.tools.productivity.email_service import EmailService
+from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
 
 
 app = FastAPI(title="Hammer Jarvis", version="0.1")
@@ -20,6 +24,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
+
+
+class AssistantChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    confirm: bool = False
 
 
 class EntityActionRequest(BaseModel):
@@ -48,6 +57,47 @@ def chat(request: ChatRequest) -> dict[str, Any]:
         return _attach_chat_answer(result)
     except Exception as exc:
         raise _to_http_exception(exc) from exc
+
+
+@app.post("/assistant/chat")
+def assistant_chat(request: AssistantChatRequest) -> dict[str, Any]:
+    try:
+        return AssistantOrchestrator().handle_message(
+            request.message,
+            confirm=request.confirm,
+        )
+    except Exception as exc:
+        raise _to_http_exception(exc) from exc
+
+
+@app.get("/assistant/providers")
+def assistant_providers() -> dict[str, Any]:
+    return {
+        "email": ["gmail", "outlook_mail"],
+        "calendar": ["outlook_calendar", "google_calendar", "timetree"],
+        "connected": {
+            "gmail": False,
+            "outlook_mail": False,
+            "outlook_calendar": False,
+            "google_calendar": False,
+            "timetree": "limited",
+        },
+    }
+
+
+@app.get("/assistant/calendar/today")
+def assistant_calendar_today() -> dict[str, Any]:
+    return CalendarService().list_today_events()
+
+
+@app.get("/assistant/email/search")
+def assistant_email_search(q: str = Query(default="")) -> dict[str, Any]:
+    return EmailService().search_emails(q)
+
+
+@app.get("/assistant/timetree/status")
+def assistant_timetree_status() -> dict[str, Any]:
+    return TimeTreeProvider().status()
 
 
 @app.get("/ha/entities")
