@@ -1,0 +1,9 @@
+{
+  "ignored_entities": [
+    {
+      "entity_id": "sensor.ecoflow_stream_ultra_x_0525_soc_ac_pro",
+      "reason": "Optional AC Pro sensor. Ignore if no AC Pro extension is installed."
+    }
+  ],
+  "downgraded_entities": []
+}

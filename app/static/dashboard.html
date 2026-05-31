@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hammer Jarvis</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>Hammer Jarvis</h1>
+          <p id="updatedAt">Lade lokale Daten...</p>
+        </div>
+        <div id="statusBadge" class="status-badge status-unknown">Unbekannt</div>
+      </header>
+
+      <section id="errorPanel" class="error-panel" hidden>
+        Verbindung zum Hammer-Jarvis-Backend fehlgeschlagen.
+      </section>
+
+      <section class="grid">
+        <article class="card card-wide">
+          <h2>Systemstatus</h2>
+          <p id="headline" class="headline">Noch keine Daten.</p>
+          <ul id="details" class="details"></ul>
+        </article>
+
+        <article class="card card-wide voice-card">
+          <h2>Jarvis Sprachsteuerung</h2>
+          <div class="voice-controls">
+            <input
+              id="commandInput"
+              class="command-input"
+              type="text"
+              autocomplete="off"
+              placeholder="Befehl eingeben oder sprechen..."
+            >
+            <div class="button-row">
+              <button id="sendCommand" class="dashboard-button" type="button">Senden</button>
+              <button id="voiceButton" class="dashboard-button primary" type="button">Sprechen</button>
+              <button id="speechToggle" class="dashboard-button" type="button">Sprachausgabe ein/aus</button>
+            </div>
+          </div>
+          <div class="quick-buttons" aria-label="Schnellbefehle">
+            <button class="quick-button" type="button" data-command="Was macht EcoFlow gerade?">Was macht EcoFlow gerade?</button>
+            <button class="quick-button" type="button" data-command="EcoFlow Energie">EcoFlow Energie</button>
+            <button class="quick-button" type="button" data-command="Welche Geräte haben Probleme?">Welche Geräte haben Probleme?</button>
+            <button class="quick-button" type="button" data-command="Home Assistant Diagnose">Home Assistant Diagnose</button>
+          </div>
+          <div id="voiceStatus" class="voice-status">Sprachsteuerung bereit.</div>
+          <div class="voice-output">
+            <div>
+              <h3>Erkannter Befehl</h3>
+              <p id="recognizedCommand">-</p>
+            </div>
+            <div>
+              <h3>Jarvis Antwort</h3>
+              <p id="jarvisAnswer">-</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2>EcoFlow Status</h2>
+          <div id="ecoflowOverall" class="metric">-</div>
+          <p id="ecoflowSummary" class="muted">Warte auf Antwort.</p>
+        </article>
+
+        <article class="card">
+          <h2>Batterie</h2>
+          <div id="soc" class="metric">-</div>
+        </article>
+
+        <article class="card">
+          <h2>PV-Leistung</h2>
+          <div id="pvPower" class="metric">-</div>
+        </article>
+
+        <article class="card">
+          <h2>Netzleistung System</h2>
+          <div id="gridPower" class="metric">-</div>
+        </article>
+
+        <article class="card">
+          <h2>LAN Smart Meter</h2>
+          <div id="smartMeter" class="metric">-</div>
+        </article>
+
+        <article class="card">
+          <h2>Batterieleistung roh</h2>
+          <div id="batteryPower" class="metric">-</div>
+        </article>
+
+        <article class="card card-wide">
+          <h2>Warnungen</h2>
+          <div id="warningCounts" class="counts">-</div>
+          <ul id="warnings" class="warning-list"></ul>
+        </article>
+
+        <article class="card card-wide">
+          <h2>Home Assistant Probleme</h2>
+          <div id="problemCounts" class="counts">-</div>
+          <ul id="problems" class="warning-list"></ul>
+        </article>
+      </section>
+    </main>
+
+    <script src="/static/dashboard.js"></script>
+  </body>
+</html>
