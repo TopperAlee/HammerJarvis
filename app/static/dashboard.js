@@ -19,6 +19,7 @@ const elements = {
   warnings: document.getElementById("warnings"),
   problemCounts: document.getElementById("problemCounts"),
   problems: document.getElementById("problems"),
+  voiceCard: document.getElementById("voiceCard"),
   commandInput: document.getElementById("commandInput"),
   sendCommand: document.getElementById("sendCommand"),
   voiceButton: document.getElementById("voiceButton"),
@@ -68,6 +69,11 @@ function setStatus(overall) {
   }[status] || "Unbekannt";
 }
 
+function setVoiceStatus(message, mode) {
+  elements.voiceStatus.textContent = message;
+  elements.voiceStatus.className = `voice-status${mode ? ` ${mode}` : ""}`;
+}
+
 function renderList(target, items, renderer) {
   target.innerHTML = "";
   if (!items || items.length === 0) {
@@ -108,57 +114,22 @@ function renderProblem(entity) {
   return wrapper;
 }
 
-function setVoiceStatus(message, mode) {
-  elements.voiceStatus.textContent = message;
-  elements.voiceStatus.className = `voice-status${mode ? ` ${mode}` : ""}`;
-}
-
 function extractChatAnswer(response) {
   if (response.answer) {
     return response.answer;
   }
-  if (response.message) {
-    return response.message;
-  }
-  if (response.human_status) {
-    return formatHumanStatus(response.human_status);
-  }
-  if (response.overview?.human_status) {
-    return formatHumanStatus(response.overview.human_status);
-  }
-  if (response.problems) {
-    return formatProblemAnswer(response.problems);
-  }
-  if (Array.isArray(response.entities)) {
-    return `Ich habe ${response.entities.length} passende Entities gefunden.`;
-  }
-  return "Ich habe eine Antwort erhalten, kann sie aber noch nicht kompakt anzeigen.";
-}
-
-function formatHumanStatus(humanStatus) {
-  const details = humanStatus.details || [];
-  if (details.length === 0) {
-    return humanStatus.headline || "Keine Zusammenfassung verfuegbar.";
-  }
-  return `${humanStatus.headline} ${details.join("; ")}`;
-}
-
-function formatProblemAnswer(problems) {
-  const critical = problems.critical_count ?? 0;
-  const warning = problems.warning_count ?? 0;
-  const info = problems.informational_count ?? 0;
-  return `Home Assistant Diagnose: ${critical} kritisch, ${warning} Warnungen, ${info} Hinweise.`;
+  return "Jarvis hat geantwortet, aber ohne lesbaren Antworttext.";
 }
 
 async function sendChatMessage(message) {
   const trimmed = message.trim();
   if (!trimmed) {
-    setVoiceStatus("Bitte zuerst einen Befehl eingeben.", "error");
     return;
   }
   elements.recognizedCommand.textContent = trimmed;
   elements.jarvisAnswer.textContent = "Jarvis denkt...";
   setVoiceStatus("Befehl wird gesendet.", "");
+
   try {
     const response = await postJson("/chat", { message: trimmed });
     const answer = extractChatAnswer(response);
@@ -183,6 +154,7 @@ function speakText(text) {
   const utterance = new SpeechSynthesisUtterance(text);
   const voices = window.speechSynthesis.getVoices();
   utterance.lang = "de-DE";
+  utterance.rate = 1;
   utterance.voice =
     voices.find((voice) => voice.lang?.toLowerCase().startsWith("de")) || null;
   window.speechSynthesis.speak(utterance);
@@ -200,14 +172,16 @@ function startVoiceRecognition() {
   if (isListening) {
     return;
   }
+
   const recognition = new SpeechRecognition();
   recognition.lang = "de-DE";
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
   recognition.onstart = () => {
     isListening = true;
+    elements.voiceCard.classList.add("listening");
     elements.voiceButton.classList.add("listening");
-    setVoiceStatus("Hoere zu...", "active");
+    setVoiceStatus("Ich höre zu...", "active");
   };
   recognition.onresult = (event) => {
     const transcript = event.results?.[0]?.[0]?.transcript || "";
@@ -222,6 +196,7 @@ function startVoiceRecognition() {
   };
   recognition.onend = () => {
     isListening = false;
+    elements.voiceCard.classList.remove("listening");
     elements.voiceButton.classList.remove("listening");
     if (!elements.voiceStatus.classList.contains("error")) {
       setVoiceStatus("Sprachsteuerung bereit.", "");
@@ -308,8 +283,8 @@ function initializeVoiceControls() {
       window.speechSynthesis.cancel();
     }
     elements.speechToggle.textContent = speechOutputEnabled
-      ? "Sprachausgabe ein/aus"
-      : "Sprachausgabe aus";
+      ? "Sprachausgabe: Ein"
+      : "Sprachausgabe: Aus";
     setVoiceStatus(
       speechOutputEnabled ? "Sprachausgabe ist eingeschaltet." : "Sprachausgabe ist ausgeschaltet.",
       "",

@@ -27,7 +27,7 @@
           <ul id="details" class="details"></ul>
         </article>
 
-        <article class="card card-wide voice-card">
+        <article id="voiceCard" class="card card-wide voice-card">
           <h2>Jarvis Sprachsteuerung</h2>
           <div class="voice-controls">
             <input
@@ -40,7 +40,7 @@
             <div class="button-row">
               <button id="sendCommand" class="dashboard-button" type="button">Senden</button>
               <button id="voiceButton" class="dashboard-button primary" type="button">Sprechen</button>
-              <button id="speechToggle" class="dashboard-button" type="button">Sprachausgabe ein/aus</button>
+              <button id="speechToggle" class="dashboard-button" type="button">Sprachausgabe: Ein</button>
             </div>
           </div>
           <div class="quick-buttons" aria-label="Schnellbefehle">
@@ -49,8 +49,11 @@
             <button class="quick-button" type="button" data-command="Welche Geräte haben Probleme?">Welche Geräte haben Probleme?</button>
             <button class="quick-button" type="button" data-command="Home Assistant Diagnose">Home Assistant Diagnose</button>
           </div>
-          <div id="voiceStatus" class="voice-status">Sprachsteuerung bereit.</div>
           <div class="voice-output">
+            <div>
+              <h3>Sprachstatus</h3>
+              <p id="voiceStatus" class="voice-status">Sprachsteuerung bereit.</p>
+            </div>
             <div>
               <h3>Erkannter Befehl</h3>
               <p id="recognizedCommand">-</p>

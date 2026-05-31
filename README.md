@@ -75,7 +75,7 @@ Klicke auf `Sprechen`, erlaube den Mikrofonzugriff im Browser und sprich einen B
 Jarvis zeigt den erkannten Befehl und die Antwort im Dashboard an und gibt die Antwort per Sprachausgabe aus, wenn die Sprachausgabe eingeschaltet ist.
 
 Die Sprachsteuerung nutzt die Web Speech API des Browsers.
-Falls die Spracherkennung nicht verfuegbar ist, verwende Chrome oder Edge.
+Falls die Spracherkennung nicht verfügbar ist, verwende Chrome oder Edge.
 Es gibt in v0.2 noch kein Wake Word und keinen Always-Listening-Modus.
 
 ## Testen mit `/docs`
@@ -146,7 +146,7 @@ Die Tests verwenden keinen echten Home Assistant Server.
 - Kein Frontend
 - Kein Docker
 - Keine Datenbank
-- Keine Voice-Assistant-Funktionen
+- Keine Python-Audiofunktionen, kein Wake Word und kein Always-Listening-Modus
 - Keine PLC-Verbindung
 - Keine autonomen Aktionen
 - Kein Cloud-Deployment
