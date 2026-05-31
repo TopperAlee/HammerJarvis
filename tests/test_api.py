@@ -237,10 +237,85 @@ def test_chat_detects_ecoflow_energy_intent(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["intent"] == "ha_ecoflow_energy"
     assert response.json()["message"] == (
-        "EcoFlow laeuft, aber einige Tageswerte sind veraltet. "
-        "Batterie: 33 %; PV-Leistung: 493 W; LAN Smart Meter: 107 W"
+        "EcoFlow laeuft, aber einige Tageswerte sind veraltet.\n"
+        "- Batterie: 33 %\n"
+        "- PV-Leistung: 493 W\n"
+        "- LAN Smart Meter: 107 W"
     )
     assert response.json()["overview"] == overview
+
+
+def test_chat_voice_prefix_triggers_ecoflow_energy_intent(monkeypatch) -> None:
+    overview = {
+        "pv_power_w": 0.0,
+        "grid_power_w": None,
+        "smart_meter_w": 22.0,
+        "battery_power_w": None,
+        "soc_percent": 30.0,
+        "human_status": {
+            "headline": "EcoFlow laeuft, aber einige Werte sind veraltet.",
+            "details": ["Batterie: 30 %", "PV-Leistung: 0 W", "LAN Smart Meter: 22 W"],
+        },
+        "warnings": [
+            {"message": "Der Tageswert Solarenergie heute ist veraltet."},
+            {"message": "Der Tageswert Verbrauch heute ist veraltet."},
+            {"message": "Der Tageswert Netzbezug heute ist veraltet."},
+            {"message": "Weitere Warnung."},
+        ],
+    }
+
+    def fake_overview(self):
+        return overview
+
+    monkeypatch.setattr(
+        "app.tools.home_assistant.HomeAssistantTool.get_ecoflow_energy_overview",
+        fake_overview,
+    )
+
+    response = client.post(
+        "/chat", json={"message": "Jarvis, was macht EcoFlow gerade?"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "ha_ecoflow_energy"
+    assert response.json()["message"] == (
+        "EcoFlow laeuft, aber einige Werte sind veraltet.\n"
+        "- Batterie: 30 %\n"
+        "- PV-Leistung: 0 W\n"
+        "- LAN Smart Meter: 22 W\n"
+        "Hinweise:\n"
+        "- Der Tageswert Solarenergie heute ist veraltet.\n"
+        "- Der Tageswert Verbrauch heute ist veraltet.\n"
+        "- Der Tageswert Netzbezug heute ist veraltet."
+    )
+
+
+def test_chat_battery_question_triggers_ecoflow_energy_intent(monkeypatch) -> None:
+    overview = {
+        "pv_power_w": None,
+        "grid_power_w": None,
+        "smart_meter_w": None,
+        "battery_power_w": None,
+        "soc_percent": 88.0,
+        "human_status": {
+            "headline": "EcoFlow laeuft ohne erkennbare Warnungen.",
+            "details": ["Batterie: 88 %"],
+        },
+        "warnings": [],
+    }
+
+    def fake_overview(self):
+        return overview
+
+    monkeypatch.setattr(
+        "app.tools.home_assistant.HomeAssistantTool.get_ecoflow_energy_overview",
+        fake_overview,
+    )
+
+    response = client.post("/chat", json={"message": "Wie voll ist die Batterie?"})
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "ha_ecoflow_energy"
 
 
 def test_ha_ecoflow_energy_endpoint_returns_overview(monkeypatch) -> None:
