@@ -63,11 +63,7 @@ class AssistantOrchestrator:
 
         if _is_email_search_intent(normalized):
             result = self.registry.run("email_search_all", query=message)
-            return self._tool_response(
-                "email_search_all",
-                "Ich kann E-Mails grundsaetzlich verarbeiten, aber dein echtes E-Mail-Konto ist noch nicht verbunden.",
-                result,
-            )
+            return self._tool_response("email_search_all", result["message"], result)
 
         if _is_calendar_create_intent(normalized):
             result = self.registry.run("calendar_create_event")
@@ -83,13 +79,9 @@ class AssistantOrchestrator:
 
         if _is_calendar_today_intent(normalized):
             result = self.registry.run("calendar_today")
-            return self._tool_response(
-                "calendar_today",
-                "Ich kann Kalenderfunktionen vorbereiten, aber dein echter Kalender ist noch nicht verbunden.",
-                result,
-            )
+            return self._tool_response("calendar_today", result["message"], result)
 
-        llm_result = self.llm_client.answer(message)
+        llm_result = self.llm_client.generate_response(message)
         write_audit_log("assistant_general_answer", {"mode": llm_result["mode"]})
         return {
             "mode": llm_result["mode"],
@@ -119,40 +111,44 @@ class AssistantOrchestrator:
 
 
 def _is_ecoflow_intent(message: str) -> bool:
-    return any(
-        term in message
-        for term in (
-            "ecoflow",
-            "solar status",
-            "energie status",
-            "wie voll ist die batterie",
-            "batteriestand",
-        )
-    )
+    energy_terms = ("ecoflow", "batterie", "solar", "pv", "strom", "energie")
+    return any(term in message for term in energy_terms)
 
 
 def _is_home_assistant_problem_intent(message: str) -> bool:
-    return any(
-        term in message
-        for term in (
-            "home assistant diagnose",
-            "welche geraete haben probleme",
-            "welche geräte haben probleme",
-            "smart home status",
-            "smart-home status",
-            "probleme",
-        )
+    terms = (
+        "home assistant diagnose",
+        "welche geraete haben probleme",
+        "welche gerate haben probleme",
+        "welche geräte haben probleme",
+        "geraete probleme",
+        "gerate probleme",
+        "geräte probleme",
+        "smart home status",
+        "smart-home status",
+        "probleme",
+        "offline",
     )
+    return any(term in message for term in terms)
 
 
 def _is_email_search_intent(message: str) -> bool:
-    return any(term in message for term in ("email", "mail", "e-mail", "posteingang", "nachricht", "e-mails"))
+    terms = (
+        "email",
+        "mail",
+        "mails",
+        "e-mail",
+        "e-mails",
+        "posteingang",
+        "nachricht",
+        "nachrichten",
+    )
+    return any(term in message for term in terms)
 
 
 def _is_email_create_intent(message: str) -> bool:
-    return _is_email_search_intent(message) and any(
-        term in message for term in ("schreibe", "entwurf", "erstelle")
-    )
+    terms = ("schreibe", "verfasse", "erstelle", "entwurf")
+    return _is_email_search_intent(message) and any(term in message for term in terms)
 
 
 def _is_email_send_intent(message: str) -> bool:
@@ -162,8 +158,18 @@ def _is_email_send_intent(message: str) -> bool:
 
 
 def _is_calendar_today_intent(message: str) -> bool:
-    return any(term in message for term in ("termin", "kalender", "meeting")) and any(
-        term in message for term in ("heute", "morgen", "welche", "was steht", "habe ich")
+    calendar_terms = (
+        "termin",
+        "termine",
+        "kalender",
+        "meeting",
+        "meetings",
+        "heute im kalender",
+        "was steht heute an",
+    )
+    today_terms = ("heute", "morgen", "welche", "was steht", "habe ich")
+    return any(term in message for term in calendar_terms) and any(
+        term in message for term in today_terms
     )
 
 

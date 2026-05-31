@@ -11,7 +11,7 @@ class GoogleCalendarProvider:
             "provider": self.name,
             "connected": False,
             "events": [],
-            "message": "Google Calendar OAuth ist noch nicht verbunden.",
+            "message": "Google Calendar ist vorbereitet, aber Google OAuth ist noch nicht verbunden.",
         }
 
     def create_event(self, request: CalendarEventCreateRequest) -> dict[str, Any]:

@@ -47,6 +47,15 @@ def test_assistant_calendar_today_routes_to_mock() -> None:
     assert "Kalender" in response.json()["answer"]
 
 
+def test_assistant_calendar_today_routes_for_was_steht_heute() -> None:
+    response = client.post(
+        "/assistant/chat", json={"message": "Was steht heute im Kalender?"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tool"] == "calendar_today"
+
+
 def test_assistant_email_search_routes_to_mock() -> None:
     response = client.post(
         "/assistant/chat", json={"message": "Suche E-Mails von Max"}
@@ -55,6 +64,15 @@ def test_assistant_email_search_routes_to_mock() -> None:
     assert response.status_code == 200
     assert response.json()["tool"] == "email_search_all"
     assert "E-Mail" in response.json()["answer"]
+
+
+def test_assistant_email_search_routes_for_new_emails() -> None:
+    response = client.post(
+        "/assistant/chat", json={"message": "Habe ich neue E-Mails?"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tool"] == "email_search_all"
 
 
 def test_assistant_email_create_draft_requires_confirmation() -> None:
@@ -139,7 +157,11 @@ def test_missing_openai_api_key_does_not_crash(monkeypatch) -> None:
 
     client_without_key = LLMClient()
 
-    assert client_without_key.mode == "rule_based_fallback"
+    result = client_without_key.generate_response("Was kannst du?")
+
+    assert client_without_key.is_available() is False
+    assert client_without_key.mode() == "rule_based_fallback"
+    assert result["available"] is False
 
 
 def test_existing_chat_still_works() -> None:

@@ -24,7 +24,11 @@ class CalendarService:
                 results.append(self.providers[provider].list_today_events())
         return {
             "providers": results,
-            "message": "Kalender ist vorbereitet, aber noch nicht mit echten Konten verbunden.",
+            "message": (
+                "Ich kann deine Termine grundsaetzlich aus Outlook lesen, aber "
+                "Outlook ist noch nicht verbunden. Die Kalender-Schnittstelle "
+                "ist vorbereitet."
+            ),
         }
 
     def create_event(
@@ -37,3 +41,6 @@ class CalendarService:
         if selected == "timetree":
             return self.providers[selected].create_event(event)
         return self.providers[selected].create_event(event)
+
+    def timetree_status(self) -> dict[str, Any]:
+        return self.providers["timetree"].status()

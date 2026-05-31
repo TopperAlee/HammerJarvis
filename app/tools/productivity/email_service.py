@@ -24,7 +24,11 @@ class EmailService:
                 for provider in selected
                 if provider in self.providers
             ],
-            "message": "E-Mail-Suche ist vorbereitet, aber noch nicht mit echten Konten verbunden.",
+            "message": (
+                "Ich kann Gmail und Outlook grundsaetzlich durchsuchen, aber "
+                "die Konten sind noch nicht verbunden. Die E-Mail-Schnittstellen "
+                "sind vorbereitet."
+            ),
         }
 
     def create_draft(

@@ -11,7 +11,7 @@ class OutlookCalendarProvider:
             "provider": self.name,
             "connected": False,
             "events": [],
-            "message": "Microsoft Graph OAuth fuer Outlook Kalender ist noch nicht verbunden.",
+            "message": "Outlook Kalender ist vorbereitet, aber Microsoft Graph OAuth ist noch nicht verbunden.",
         }
 
     def create_event(self, request: CalendarEventCreateRequest) -> dict[str, Any]:

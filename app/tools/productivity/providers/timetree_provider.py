@@ -4,8 +4,8 @@ from app.tools.productivity.models import CalendarEventCreateRequest
 
 
 TIMETREE_LIMITED_MESSAGE = (
-    "TimeTree wird vorerst nur als Import/Export- oder ICS-Quelle vorbereitet, "
-    "da die oeffentliche Entwickler-API nicht mehr regulaer verfuegbar ist."
+    "TimeTree ist nur eingeschraenkt vorbereitet. Es wird vorerst als "
+    "Import/Export- oder ICS-Quelle behandelt."
 )
 
 
@@ -25,6 +25,7 @@ class TimeTreeProvider:
             "provider": self.name,
             "status": "limited",
             "blocked": True,
+            "not_supported": True,
             "event": request.__dict__,
             "message": TIMETREE_LIMITED_MESSAGE,
         }
