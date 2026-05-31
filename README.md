@@ -46,31 +46,34 @@ Die echte `.env` darf nicht committed werden.
 ## Server Starten
 
 ```powershell
-uvicorn app.main:app --reload
+.\scripts\start-jarvis.ps1
 ```
+
+Der dokumentierte Entwicklungsport ist `8001`, weil `8000` auf diesem Windows-Rechner haeufig bereits belegt ist.
+Wenn `8000` frei ist, kann der Server alternativ manuell mit `uvicorn app.main:app --reload --port 8000` gestartet werden.
 
 ## Browser URLs
 
-- API Startseite: `http://127.0.0.1:8000/`
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- Home Assistant Entities: `http://127.0.0.1:8000/ha/entities`
-- Nicht verfuegbare Entities: `http://127.0.0.1:8000/ha/unavailable`
-- Klassifizierte Home Assistant Probleme: `http://127.0.0.1:8000/ha/problems`
-- EcoFlow Diagnose: `http://127.0.0.1:8000/ha/ecoflow`
-- EcoFlow Energieuebersicht: `http://127.0.0.1:8000/ha/ecoflow/energy`
-- Energie-/Leistungswerte: `http://127.0.0.1:8000/ha/power`
+- API Startseite: `http://127.0.0.1:8001/`
+- Swagger UI: `http://127.0.0.1:8001/docs`
+- Home Assistant Entities: `http://127.0.0.1:8001/ha/entities`
+- Nicht verfuegbare Entities: `http://127.0.0.1:8001/ha/unavailable`
+- Klassifizierte Home Assistant Probleme: `http://127.0.0.1:8001/ha/problems`
+- EcoFlow Diagnose: `http://127.0.0.1:8001/ha/ecoflow`
+- EcoFlow Energieuebersicht: `http://127.0.0.1:8001/ha/ecoflow/energy`
+- Energie-/Leistungswerte: `http://127.0.0.1:8001/ha/power`
 
 ## Dashboard oeffnen
 
 Das lokale Dashboard ist nach dem Serverstart im Browser erreichbar:
 
 ```text
-http://127.0.0.1:8000/dashboard
+http://127.0.0.1:8001/dashboard
 ```
 
 ## Sprachsteuerung
 
-Oeffne das lokale Dashboard unter `http://127.0.0.1:8000/dashboard`.
+Oeffne das lokale Dashboard unter `http://127.0.0.1:8001/dashboard`.
 Klicke auf `Sprechen`, erlaube den Mikrofonzugriff im Browser und sprich einen Befehl.
 Jarvis zeigt den erkannten Befehl und die Antwort im Dashboard an und gibt die Antwort per Sprachausgabe aus, wenn die Sprachausgabe eingeschaltet ist.
 
@@ -83,7 +86,7 @@ Es gibt in v0.2 noch kein Wake Word und keinen Always-Listening-Modus.
 Der neue Agent-Orchestrator ist ueber diesen lokalen Endpunkt erreichbar:
 
 ```text
-POST http://127.0.0.1:8000/assistant/chat
+POST http://127.0.0.1:8001/assistant/chat
 ```
 
 `/chat` bleibt als regelbasierter Bestandsendpunkt erhalten.
@@ -110,10 +113,10 @@ Die Provider sind vorbereitet, aber noch nicht mit echten Konten verbunden.
 Diese lokalen Endpunkte zeigen den aktuellen Integrationsstatus:
 
 ```text
-GET http://127.0.0.1:8000/assistant/providers
-GET http://127.0.0.1:8000/assistant/calendar/today
-GET http://127.0.0.1:8000/assistant/email/search?q=example
-GET http://127.0.0.1:8000/assistant/timetree/status
+GET http://127.0.0.1:8001/assistant/providers
+GET http://127.0.0.1:8001/assistant/calendar/today
+GET http://127.0.0.1:8001/assistant/email/search?q=example
+GET http://127.0.0.1:8001/assistant/timetree/status
 ```
 
 E-Mail-Suche und Kalenderabfragen liefern aktuell sichere Mock-Antworten.
@@ -123,7 +126,7 @@ Schreibende Aktionen bleiben bestaetigungspflichtig oder blockiert, bis die jewe
 
 ## Testen mit `/docs`
 
-Oeffne `http://127.0.0.1:8000/docs` im Browser.
+Oeffne `http://127.0.0.1:8001/docs` im Browser.
 Dort kannst du die Endpunkte lokal testen.
 
 Beispiel fuer `/chat`:
