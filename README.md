@@ -124,6 +124,50 @@ Echte E-Mails werden nicht gesendet.
 Kalendereintraege werden noch nicht real erstellt.
 Schreibende Aktionen bleiben bestaetigungspflichtig oder blockiert, bis die jeweiligen Provider sicher konfiguriert sind.
 
+## Gmail verbinden
+
+Hammer Jarvis v0.4 kann Gmail lokal und read-only ueber die offizielle Gmail API durchsuchen.
+Es werden keine E-Mails gesendet und in diesem Schritt noch keine echten Entwuerfe erstellt.
+
+So richtest du Gmail ein:
+
+1. Oeffne die Google Cloud Console und erstelle oder waehle ein Projekt.
+2. Aktiviere die Gmail API fuer dieses Projekt.
+3. Konfiguriere den OAuth Consent Screen. Fuer ein privates Konto reicht normalerweise `External` mit Testnutzern; bei Google Workspace kann `Internal` passen.
+4. Erstelle eine OAuth Client ID vom Typ `Desktop App`.
+5. Lade die JSON-Datei herunter.
+6. Speichere sie lokal als:
+
+```text
+app/secrets/google/gmail_credentials.json
+```
+
+7. Setze in deiner lokalen `.env`:
+
+```text
+GMAIL_ENABLED=true
+GOOGLE_GMAIL_CREDENTIALS_FILE=app/secrets/google/gmail_credentials.json
+GOOGLE_GMAIL_TOKEN_FILE=app/secrets/google/gmail_token.json
+```
+
+8. Starte Hammer Jarvis:
+
+```powershell
+.\scripts\start-jarvis.ps1
+```
+
+Beim ersten Gmail-Aufruf oeffnet sich der Browser fuer den lokalen OAuth-Login.
+Das Token wird danach lokal unter `app/secrets/google/gmail_token.json` gespeichert und von Git ignoriert.
+
+Der Status ist lokal abrufbar:
+
+```text
+GET http://127.0.0.1:8001/assistant/gmail/status
+```
+
+v0.4 nutzt nur den Gmail-Read-only-Scope `https://www.googleapis.com/auth/gmail.readonly`.
+Gmail-Senden bleibt blockiert, und Gmail-Entwuerfe bleiben vorerst Mock-Verhalten.
+
 ## Testen mit `/docs`
 
 Oeffne `http://127.0.0.1:8001/docs` im Browser.

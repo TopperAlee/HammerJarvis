@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from app.agent.core import normalize_message
@@ -62,7 +63,8 @@ class AssistantOrchestrator:
             }
 
         if _is_email_search_intent(normalized):
-            result = self.registry.run("email_search_all", query=message)
+            query = _build_email_search_query(message, normalized)
+            result = self.registry.run("email_search_all", query=query)
             return self._tool_response("email_search_all", result["message"], result)
 
         if _is_calendar_create_intent(normalized):
@@ -142,8 +144,36 @@ def _is_email_search_intent(message: str) -> bool:
         "posteingang",
         "nachricht",
         "nachrichten",
+        "gmail",
     )
     return any(term in message for term in terms)
+
+
+def _build_email_search_query(original_message: str, normalized_message: str) -> str:
+    if "ungelesene" in normalized_message or "neue e-mail" in normalized_message:
+        return "is:unread newer_than:30d"
+
+    sender_match = re.search(
+        r"(?:e-?mails?|mails?)\s+von\s+(.+)$",
+        original_message,
+        re.I,
+    )
+    if sender_match:
+        sender = sender_match.group(1).strip(" ?!.:,;")
+        if sender:
+            return f"from:{sender} newer_than:90d"
+
+    gmail_match = re.search(
+        r"suche\s+gmail\s+nach\s+(.+)$",
+        original_message,
+        re.I,
+    )
+    if gmail_match:
+        query = gmail_match.group(1).strip()
+        if query:
+            return query
+
+    return original_message
 
 
 def _is_email_create_intent(message: str) -> bool:

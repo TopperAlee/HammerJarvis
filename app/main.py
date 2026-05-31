@@ -14,6 +14,7 @@ from app.logging_utils.audit import write_audit_log
 from app.tools.home_assistant import HomeAssistantTool
 from app.tools.productivity.calendar_service import CalendarService
 from app.tools.productivity.email_service import EmailService
+from app.tools.productivity.providers.gmail_provider import GmailProvider
 from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
 
 
@@ -93,6 +94,11 @@ def assistant_calendar_today() -> dict[str, Any]:
 @app.get("/assistant/email/search")
 def assistant_email_search(q: str = Query(default="")) -> dict[str, Any]:
     return EmailService().search_emails(q)
+
+
+@app.get("/assistant/gmail/status")
+def assistant_gmail_status() -> dict[str, Any]:
+    return GmailProvider().status()
 
 
 @app.get("/assistant/timetree/status")

@@ -124,6 +124,98 @@ def test_email_search_endpoint_returns_gmail_and_outlook_mock_results() -> None:
     assert providers == ["gmail", "outlook_mail"]
 
 
+def test_gmail_status_returns_disabled_when_env_false(monkeypatch, tmp_path) -> None:
+    from app.tools.productivity.providers.gmail_provider import GmailProvider
+
+    credentials_file = tmp_path / "gmail_credentials.json"
+    token_file = tmp_path / "gmail_token.json"
+    monkeypatch.setenv("GMAIL_ENABLED", "false")
+    monkeypatch.setenv("GOOGLE_GMAIL_CREDENTIALS_FILE", str(credentials_file))
+    monkeypatch.setenv("GOOGLE_GMAIL_TOKEN_FILE", str(token_file))
+
+    status = GmailProvider().status()
+
+    assert status == {
+        "provider": "gmail",
+        "enabled": False,
+        "credentials_file_exists": False,
+        "token_file_exists": False,
+        "connected": False,
+    }
+
+
+def test_gmail_provider_returns_mock_when_not_configured(monkeypatch, tmp_path) -> None:
+    from app.tools.productivity.providers.gmail_provider import GmailProvider
+
+    monkeypatch.setenv("GMAIL_ENABLED", "false")
+    monkeypatch.setenv(
+        "GOOGLE_GMAIL_CREDENTIALS_FILE", str(tmp_path / "gmail_credentials.json")
+    )
+
+    result = GmailProvider().search_emails("Max")
+
+    assert result["provider"] == "gmail"
+    assert result["connected"] is False
+    assert result["emails"] == []
+    assert "noch nicht verbunden" in result["message"]
+
+
+def test_gmail_status_endpoint_returns_200(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("GMAIL_ENABLED", "false")
+    monkeypatch.setenv(
+        "GOOGLE_GMAIL_CREDENTIALS_FILE", str(tmp_path / "gmail_credentials.json")
+    )
+    monkeypatch.setenv("GOOGLE_GMAIL_TOKEN_FILE", str(tmp_path / "gmail_token.json"))
+
+    response = client.get("/assistant/gmail/status")
+
+    assert response.status_code == 200
+    assert response.json()["provider"] == "gmail"
+    assert response.json()["enabled"] is False
+
+
+def test_assistant_email_search_routes_unread_to_gmail_query(monkeypatch) -> None:
+    captured = {}
+
+    def fake_search(self, query, providers=None):
+        captured["query"] = query
+        return {"providers": [], "message": "ok"}
+
+    monkeypatch.setattr(
+        "app.tools.productivity.email_service.EmailService.search_emails",
+        fake_search,
+    )
+
+    response = client.post(
+        "/assistant/chat", json={"message": "Zeig mir ungelesene E-Mails"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tool"] == "email_search_all"
+    assert captured["query"] == "is:unread newer_than:30d"
+
+
+def test_assistant_email_search_routes_sender_to_gmail_query(monkeypatch) -> None:
+    captured = {}
+
+    def fake_search(self, query, providers=None):
+        captured["query"] = query
+        return {"providers": [], "message": "ok"}
+
+    monkeypatch.setattr(
+        "app.tools.productivity.email_service.EmailService.search_emails",
+        fake_search,
+    )
+
+    response = client.post(
+        "/assistant/chat", json={"message": "Suche E-Mails von Max"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tool"] == "email_search_all"
+    assert captured["query"] == "from:Max newer_than:90d"
+
+
 def test_timetree_status_endpoint_returns_limited() -> None:
     response = client.get("/assistant/timetree/status")
 
