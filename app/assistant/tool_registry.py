@@ -109,6 +109,22 @@ class ToolRegistry:
             False,
         )
         self.register(
+            "timetree_today",
+            "Listet heutige TimeTree-Termine aus lokaler ICS-Datei.",
+            ActionRisk.GREEN,
+            timetree_provider.list_today_events,
+            {},
+            False,
+        )
+        self.register(
+            "timetree_events",
+            "Listet TimeTree-Termine aus lokaler ICS-Datei.",
+            ActionRisk.GREEN,
+            timetree_provider.list_events,
+            {},
+            False,
+        )
+        self.register(
             "general_answer",
             "Fallback fuer allgemeine Antworten.",
             ActionRisk.GREEN,

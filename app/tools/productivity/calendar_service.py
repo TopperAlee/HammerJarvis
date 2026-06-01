@@ -19,7 +19,7 @@ class CalendarService:
         results: list[dict[str, Any]] = []
         for provider in selected:
             if provider == "timetree":
-                results.append(self.providers[provider].list_events())
+                results.append(self.providers[provider].list_today_events())
             elif provider in self.providers:
                 results.append(self.providers[provider].list_today_events())
         return {

@@ -106,6 +106,16 @@ def assistant_timetree_status() -> dict[str, Any]:
     return TimeTreeProvider().status()
 
 
+@app.get("/assistant/timetree/today")
+def assistant_timetree_today() -> dict[str, Any]:
+    return TimeTreeProvider().list_today_events()
+
+
+@app.get("/assistant/timetree/events")
+def assistant_timetree_events() -> dict[str, Any]:
+    return TimeTreeProvider().list_events()
+
+
 @app.get("/ha/entities")
 def get_entities() -> list[dict[str, Any]]:
     try:

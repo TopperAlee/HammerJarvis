@@ -7,3 +7,4 @@ app/logs/audit.log
 .pytest_cache/
 app/secrets/google/*.json
 app/secrets/**/*.json
+app/data/timetree/*.ics

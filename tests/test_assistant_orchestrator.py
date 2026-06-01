@@ -2,6 +2,7 @@ from app.assistant.llm_client import LLMClient
 from app.main import app
 from fastapi.testclient import TestClient
 import pytest
+from datetime import date, timedelta
 
 
 client = TestClient(app)
@@ -15,6 +16,8 @@ def disable_real_gmail(monkeypatch, tmp_path):
         str(tmp_path / "gmail_credentials.json"),
     )
     monkeypatch.setenv("GOOGLE_GMAIL_TOKEN_FILE", str(tmp_path / "gmail_token.json"))
+    monkeypatch.setenv("TIMETREE_ENABLED", "false")
+    monkeypatch.setenv("TIMETREE_ICS_FILE", str(tmp_path / "timetree.ics"))
 
 
 def test_assistant_chat_returns_200() -> None:
@@ -407,7 +410,7 @@ def test_timetree_status_endpoint_returns_limited() -> None:
 
     assert response.status_code == 200
     assert response.json()["provider"] == "timetree"
-    assert response.json()["status"] == "limited"
+    assert response.json()["connected"] == "limited"
 
 
 def test_timetree_create_event_is_blocked() -> None:
@@ -419,7 +422,178 @@ def test_timetree_create_event_is_blocked() -> None:
     )
 
     assert result["blocked"] is True
-    assert result["status"] == "limited"
+    assert result["status"] == "not_supported"
+
+
+def test_timetree_status_disabled(monkeypatch, tmp_path) -> None:
+    from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
+
+    monkeypatch.setenv("TIMETREE_ENABLED", "false")
+    monkeypatch.setenv("TIMETREE_ICS_FILE", str(tmp_path / "missing.ics"))
+
+    result = TimeTreeProvider().status()
+
+    assert result["provider"] == "timetree"
+    assert result["enabled"] is False
+    assert result["connected"] == "limited"
+    assert "deaktiviert" in result["message"]
+
+
+def test_timetree_enabled_missing_ics_returns_clear_message(monkeypatch, tmp_path) -> None:
+    from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
+
+    monkeypatch.setenv("TIMETREE_ENABLED", "true")
+    monkeypatch.setenv("TIMETREE_ICS_FILE", str(tmp_path / "missing.ics"))
+
+    result = TimeTreeProvider().list_events()
+
+    assert result["enabled"] is True
+    assert result["connected"] is False
+    assert result["events"] == []
+    assert result["message"] == "TimeTree ICS-Datei wurde nicht gefunden."
+
+
+def test_timetree_valid_ics_with_today_event_returns_event(monkeypatch, tmp_path) -> None:
+    from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
+
+    ics_file = tmp_path / "timetree.ics"
+    today = date.today()
+    ics_file.write_text(
+        _ics(
+            f"""
+BEGIN:VEVENT
+UID:today@example
+SUMMARY:Werkstatt
+DTSTART:{today.strftime('%Y%m%d')}T090000
+DTEND:{today.strftime('%Y%m%d')}T100000
+LOCATION:Halle
+DESCRIPTION:Planung
+END:VEVENT
+"""
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TIMETREE_ENABLED", "true")
+    monkeypatch.setenv("TIMETREE_ICS_FILE", str(ics_file))
+
+    result = TimeTreeProvider().list_today_events()
+
+    assert result["count"] == 1
+    assert result["events"][0]["title"] == "Werkstatt"
+    assert result["events"][0]["all_day"] is False
+    assert result["events"][0]["source"] == "ics"
+
+
+def test_timetree_valid_ics_with_all_day_today_event_returns_event(monkeypatch, tmp_path) -> None:
+    from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
+
+    ics_file = tmp_path / "timetree.ics"
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    ics_file.write_text(
+        _ics(
+            f"""
+BEGIN:VEVENT
+UID:allday@example
+SUMMARY:Ganztag
+DTSTART;VALUE=DATE:{today.strftime('%Y%m%d')}
+DTEND;VALUE=DATE:{tomorrow.strftime('%Y%m%d')}
+END:VEVENT
+"""
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TIMETREE_ENABLED", "true")
+    monkeypatch.setenv("TIMETREE_ICS_FILE", str(ics_file))
+
+    result = TimeTreeProvider().list_today_events()
+
+    assert result["count"] == 1
+    assert result["events"][0]["title"] == "Ganztag"
+    assert result["events"][0]["all_day"] is True
+
+
+def test_timetree_future_event_not_in_today(monkeypatch, tmp_path) -> None:
+    from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
+
+    ics_file = tmp_path / "timetree.ics"
+    future = date.today() + timedelta(days=7)
+    ics_file.write_text(
+        _ics(
+            f"""
+BEGIN:VEVENT
+UID:future@example
+SUMMARY:Zukunft
+DTSTART:{future.strftime('%Y%m%d')}T090000
+DTEND:{future.strftime('%Y%m%d')}T100000
+END:VEVENT
+"""
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TIMETREE_ENABLED", "true")
+    monkeypatch.setenv("TIMETREE_ICS_FILE", str(ics_file))
+
+    result = TimeTreeProvider().list_today_events()
+
+    assert result["count"] == 0
+    assert result["events"] == []
+
+
+def test_timetree_invalid_ics_does_not_crash(monkeypatch, tmp_path) -> None:
+    from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
+
+    ics_file = tmp_path / "timetree.ics"
+    ics_file.write_text("not an ics file", encoding="utf-8")
+    monkeypatch.setenv("TIMETREE_ENABLED", "true")
+    monkeypatch.setenv("TIMETREE_ICS_FILE", str(ics_file))
+
+    result = TimeTreeProvider().list_events()
+
+    assert result["provider"] == "timetree"
+    assert result["error"] is True
+    assert result["events"] == []
+
+
+def test_timetree_today_endpoint_returns_200() -> None:
+    response = client.get("/assistant/timetree/today")
+
+    assert response.status_code == 200
+    assert response.json()["provider"] == "timetree"
+
+
+def test_timetree_events_endpoint_returns_200() -> None:
+    response = client.get("/assistant/timetree/events")
+
+    assert response.status_code == 200
+    assert response.json()["provider"] == "timetree"
+
+
+def test_assistant_timetree_today_intent_routes_to_today(monkeypatch, tmp_path) -> None:
+    ics_file = tmp_path / "timetree.ics"
+    today = date.today()
+    ics_file.write_text(
+        _ics(
+            f"""
+BEGIN:VEVENT
+UID:voice@example
+SUMMARY:Voice Termin
+DTSTART:{today.strftime('%Y%m%d')}T130000
+DTEND:{today.strftime('%Y%m%d')}T140000
+END:VEVENT
+"""
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TIMETREE_ENABLED", "true")
+    monkeypatch.setenv("TIMETREE_ICS_FILE", str(ics_file))
+
+    response = client.post("/assistant/chat", json={"message": "TimeTree heute"})
+
+    assert response.status_code == 200
+    assert response.json()["tool"] == "timetree_today"
+    assert "Heute stehen 1 TimeTree-Termine an" in response.json()["answer"]
+    assert "Voice Termin" in response.json()["answer"]
 
 
 def test_email_service_send_email_is_blocked() -> None:
@@ -459,5 +633,8 @@ def test_assistant_timetree_intent_routes_to_status() -> None:
     response = client.post("/assistant/chat", json={"message": "Was ist mit TimeTree?"})
 
     assert response.status_code == 200
-    assert response.json()["tool"] == "timetree_status"
-    assert response.json()["result"]["status"] == "limited"
+    assert response.json()["tool"] == "timetree_today"
+
+
+def _ics(body: str) -> str:
+    return "BEGIN:VCALENDAR\nVERSION:2.0\n" + body.strip() + "\nEND:VCALENDAR\n"

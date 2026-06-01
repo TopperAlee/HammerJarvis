@@ -37,8 +37,12 @@ class AssistantOrchestrator:
             return self._tool_response("home_assistant_get_problems", answer, result)
 
         if _is_timetree_intent(normalized):
-            result = self.registry.run("timetree_status")
-            return self._tool_response("timetree_status", result["message"], result)
+            result = self.registry.run("timetree_today")
+            return self._tool_response(
+                "timetree_today",
+                _format_timetree_today_answer(result),
+                result,
+            )
 
         if _is_email_send_intent(normalized):
             result = self.registry.run("email_send_blocked")
@@ -261,6 +265,32 @@ def _is_calendar_create_intent(message: str) -> bool:
 
 def _is_timetree_intent(message: str) -> bool:
     return "timetree" in message
+
+
+def _format_timetree_today_answer(result: dict[str, Any]) -> str:
+    if result.get("enabled") is False:
+        return "TimeTree ist vorbereitet, aber der ICS-Import ist noch deaktiviert."
+    if result.get("error"):
+        return "Die lokale TimeTree ICS-Datei konnte nicht gelesen werden."
+    if result.get("connected") is False:
+        return str(result.get("message", "TimeTree ICS-Datei wurde nicht gefunden."))
+
+    events = result.get("events", [])
+    if not events:
+        return "Heute stehen keine TimeTree-Termine in der lokalen ICS-Datei."
+
+    lines = [f"Heute stehen {len(events)} TimeTree-Termine an:"]
+    for index, event in enumerate(events, start=1):
+        prefix = "Ganztägig" if event.get("all_day") else _format_event_time(event)
+        lines.append(f"{index}. {prefix} {event.get('title', '')}".strip())
+    return "\n".join(lines)
+
+
+def _format_event_time(event: dict[str, Any]) -> str:
+    try:
+        return event["start"][11:16] if "T" in event["start"] else "Ganztägig"
+    except Exception:
+        return ""
 
 
 def _format_ecoflow_answer(overview: dict[str, Any]) -> str:

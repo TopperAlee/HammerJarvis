@@ -168,6 +168,35 @@ GET http://127.0.0.1:8001/assistant/gmail/status
 v0.4 nutzt nur den Gmail-Read-only-Scope `https://www.googleapis.com/auth/gmail.readonly`.
 Gmail-Senden bleibt blockiert, und Gmail-Entwuerfe bleiben vorerst Mock-Verhalten.
 
+## TimeTree limited / ICS
+
+Hammer Jarvis nutzt keine direkte TimeTree-API, keine inoffizielle Scraping-Anbindung und keine TimeTree-Zugangsdaten.
+TimeTree wird in v0.5 nur als lokale ICS-Lesequelle behandelt.
+
+Lege die exportierte oder synchronisierte ICS-Datei lokal ab:
+
+```text
+app/data/timetree/timetree.ics
+```
+
+Aktiviere den Import in deiner lokalen `.env`:
+
+```text
+TIMETREE_ENABLED=true
+TIMETREE_ICS_FILE=app/data/timetree/timetree.ics
+```
+
+Die lokalen TimeTree-Endpunkte sind:
+
+```text
+GET http://127.0.0.1:8001/assistant/timetree/status
+GET http://127.0.0.1:8001/assistant/timetree/events
+GET http://127.0.0.1:8001/assistant/timetree/today
+```
+
+TimeTree-Schreiben und das Erstellen von TimeTree-Terminen sind nicht unterstuetzt.
+Speichere keine TimeTree-Benutzernamen, Passwoerter oder sonstigen Zugangsdaten in Hammer Jarvis.
+
 ## Testen mit `/docs`
 
 Oeffne `http://127.0.0.1:8001/docs` im Browser.
