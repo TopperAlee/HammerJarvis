@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -16,33 +17,38 @@ class GmailProvider:
     name = "gmail"
 
     def search_emails(self, query: str) -> dict[str, Any]:
-        if not self._is_configured():
-            return self._mock_search_response(query)
+        try:
+            if not self._is_configured():
+                return self._mock_search_response(query)
 
-        service = self._build_service()
-        response = (
-            service.users()
-            .messages()
-            .list(userId="me", q=query, maxResults=10)
-            .execute()
-        )
-        messages = response.get("messages", [])
-        emails = [
-            self.get_message_summary(str(message["id"]), service=service)
-            for message in messages
-            if message.get("id")
-        ]
-        return {
-            "provider": self.name,
-            "connected": True,
-            "emails": emails,
-            "query": query,
-            "message": (
-                "Keine passenden Gmail-Nachrichten gefunden."
-                if not emails
-                else f"{len(emails)} Gmail-Nachrichten gefunden."
-            ),
-        }
+            service = self._build_service()
+            response = (
+                service.users()
+                .messages()
+                .list(userId="me", q=query, maxResults=10)
+                .execute()
+            )
+            messages = response.get("messages", [])
+            emails = [
+                self.get_message_summary(str(message["id"]), service=service)
+                for message in messages
+                if message.get("id")
+            ]
+            return {
+                "provider": self.name,
+                "connected": True,
+                "emails": emails,
+                "query": query,
+                "message": (
+                    "Keine passenden Gmail-Nachrichten gefunden."
+                    if not emails
+                    else f"{len(emails)} Gmail-Nachrichten gefunden."
+                ),
+            }
+        except self._handled_gmail_exceptions():
+            return self.error_response(query)
+        except Exception:
+            return self.error_response(query)
 
     def get_message_summary(
         self,
@@ -115,6 +121,22 @@ class GmailProvider:
             "connected": enabled and credentials_file_exists and token_file_exists,
         }
 
+    def error_response(self, query: str | None = None) -> dict[str, Any]:
+        response: dict[str, Any] = {
+            "provider": self.name,
+            "connected": False,
+            "error": True,
+            "message": "Gmail konnte nicht verbunden oder durchsucht werden.",
+            "technical_hint": (
+                "OAuth-Client ist ungueltig oder das Client Secret passt nicht. "
+                "Bitte gmail_credentials.json neu aus Google Cloud herunterladen."
+            ),
+            "emails": [],
+        }
+        if query is not None:
+            response["query"] = query
+        return response
+
     def _is_configured(self) -> bool:
         return self._enabled() and self._credentials_file().is_file()
 
@@ -151,6 +173,25 @@ class GmailProvider:
         from googleapiclient.discovery import build
 
         return build("gmail", "v1", credentials=self._get_credentials())
+
+    def _handled_gmail_exceptions(self) -> tuple[type[BaseException], ...]:
+        exceptions: list[type[BaseException]] = [
+            ModuleNotFoundError,
+            FileNotFoundError,
+            json.JSONDecodeError,
+            ValueError,
+        ]
+        for module_name, class_name in (
+            ("oauthlib.oauth2.rfc6749.errors", "InvalidClientError"),
+            ("google.auth.exceptions", "RefreshError"),
+            ("googleapiclient.errors", "HttpError"),
+        ):
+            try:
+                module = __import__(module_name, fromlist=[class_name])
+                exceptions.append(getattr(module, class_name))
+            except (ImportError, AttributeError):
+                continue
+        return tuple(exceptions)
 
     def _mock_search_response(self, query: str) -> dict[str, Any]:
         return {

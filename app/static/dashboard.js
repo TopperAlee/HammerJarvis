@@ -135,6 +135,12 @@ async function sendChatMessage(message) {
     try {
       response = await postJson("/assistant/chat", { message: trimmed, confirm: false });
     } catch (assistantError) {
+      if (!isLegacyHomeAssistantCommand(trimmed)) {
+        const messageText = "Der neue Assistant-Endpunkt hat einen Fehler gemeldet. Bitte prüfe die Backend-Konsole.";
+        elements.jarvisAnswer.textContent = messageText;
+        setVoiceStatus(messageText, "error");
+        return;
+      }
       response = await postJson("/chat", { message: trimmed });
     }
     const answer = extractChatAnswer(response);
@@ -148,6 +154,37 @@ async function sendChatMessage(message) {
     elements.jarvisAnswer.textContent = messageText;
     setVoiceStatus(messageText, "error");
   }
+}
+
+function isLegacyHomeAssistantCommand(message) {
+  const normalized = message.toLowerCase();
+  const assistantTerms = [
+    "gmail",
+    "email",
+    "e-mail",
+    "mail",
+    "posteingang",
+    "nachricht",
+    "kalender",
+    "termin",
+    "meeting",
+    "timetree",
+  ];
+  if (assistantTerms.some((term) => normalized.includes(term))) {
+    return false;
+  }
+  return [
+    "home assistant",
+    "schalte",
+    "geräte",
+    "geraete",
+    "probleme",
+    "offline",
+    "entities",
+    "entity",
+    "nicht verfügbar",
+    "nicht verfuegbar",
+  ].some((term) => normalized.includes(term));
 }
 
 function speakText(text) {

@@ -6,6 +6,7 @@ from app.agent.permissions import ActionRisk
 from app.assistant.llm_client import LLMClient
 from app.assistant.tool_registry import ToolRegistry
 from app.logging_utils.audit import write_audit_log
+from app.tools.productivity.email_service import clean_email_snippet
 
 
 class AssistantOrchestrator:
@@ -65,7 +66,12 @@ class AssistantOrchestrator:
         if _is_email_search_intent(normalized):
             query = _build_email_search_query(message, normalized)
             result = self.registry.run("email_search_all", query=query)
-            return self._tool_response("email_search_all", result["message"], result)
+            answer = (
+                _gmail_error_answer()
+                if _has_gmail_error(result)
+                else _format_email_answer(result)
+            )
+            return self._tool_response("email_search_all", answer, result)
 
         if _is_calendar_create_intent(normalized):
             result = self.registry.run("calendar_create_event")
@@ -174,6 +180,50 @@ def _build_email_search_query(original_message: str, normalized_message: str) ->
             return query
 
     return original_message
+
+
+def _has_gmail_error(result: dict[str, Any]) -> bool:
+    providers = result.get("providers", [])
+    return any(
+        item.get("provider") == "gmail" and item.get("error") is True
+        for item in providers
+        if isinstance(item, dict)
+    )
+
+
+def _gmail_error_answer() -> str:
+    return (
+        "Gmail ist noch nicht korrekt verbunden. Der OAuth-Client oder das "
+        "Client Secret ist ungueltig. Bitte lade die gmail_credentials.json "
+        "erneut aus Google Cloud herunter. Outlook Mail ist weiterhin "
+        "vorbereitet, aber noch nicht verbunden."
+    )
+
+
+def _format_email_answer(result: dict[str, Any]) -> str:
+    lines = [str(result.get("message", "")).strip()]
+    emails = _collect_emails(result)
+    for index, email in enumerate(emails[:5], start=1):
+        sender = str(email.get("sender") or "Unbekannter Absender").strip()
+        subject = clean_email_snippet(str(email.get("subject") or "(kein Betreff)"))
+        date = str(email.get("date") or "").strip()
+        item = f"{index}. {sender}: {subject}"
+        if date:
+            item += f" ({date})"
+        lines.append(item)
+    return "\n".join(line for line in lines if line)
+
+
+def _collect_emails(result: dict[str, Any]) -> list[dict[str, Any]]:
+    emails: list[dict[str, Any]] = []
+    for provider in result.get("providers", []):
+        if isinstance(provider, dict) and provider.get("connected") is True:
+            emails.extend(
+                email
+                for email in provider.get("emails", [])
+                if isinstance(email, dict)
+            )
+    return emails
 
 
 def _is_email_create_intent(message: str) -> bool:

@@ -1,9 +1,20 @@
 from app.assistant.llm_client import LLMClient
 from app.main import app
 from fastapi.testclient import TestClient
+import pytest
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def disable_real_gmail(monkeypatch, tmp_path):
+    monkeypatch.setenv("GMAIL_ENABLED", "false")
+    monkeypatch.setenv(
+        "GOOGLE_GMAIL_CREDENTIALS_FILE",
+        str(tmp_path / "gmail_credentials.json"),
+    )
+    monkeypatch.setenv("GOOGLE_GMAIL_TOKEN_FILE", str(tmp_path / "gmail_token.json"))
 
 
 def test_assistant_chat_returns_200() -> None:
@@ -172,6 +183,181 @@ def test_gmail_status_endpoint_returns_200(monkeypatch, tmp_path) -> None:
     assert response.status_code == 200
     assert response.json()["provider"] == "gmail"
     assert response.json()["enabled"] is False
+
+
+def test_gmail_invalid_client_error_returns_structured_error(monkeypatch, tmp_path) -> None:
+    from app.tools.productivity.providers.gmail_provider import GmailProvider
+
+    class InvalidClientError(Exception):
+        pass
+
+    credentials_file = tmp_path / "gmail_credentials.json"
+    credentials_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GMAIL_ENABLED", "true")
+    monkeypatch.setenv("GOOGLE_GMAIL_CREDENTIALS_FILE", str(credentials_file))
+
+    def fail_build_service(self):
+        raise InvalidClientError(
+            "invalid_client: client_secret=do-not-leak authorization_url=do-not-leak"
+        )
+
+    monkeypatch.setattr(GmailProvider, "_build_service", fail_build_service)
+
+    result = GmailProvider().search_emails("Max")
+
+    assert result["provider"] == "gmail"
+    assert result["connected"] is False
+    assert result["error"] is True
+    assert result["emails"] == []
+    assert "Gmail konnte nicht verbunden" in result["message"]
+    assert "Client Secret" in result["technical_hint"]
+    assert "do-not-leak" not in str(result)
+
+
+def test_email_service_keeps_outlook_when_gmail_fails(monkeypatch) -> None:
+    from app.tools.productivity.email_service import EmailService
+
+    def fail_gmail(self, query):
+        raise RuntimeError("secret failure")
+
+    monkeypatch.setattr(
+        "app.tools.productivity.providers.gmail_provider.GmailProvider.search_emails",
+        fail_gmail,
+    )
+
+    result = EmailService().search_emails("Max")
+
+    assert [item["provider"] for item in result["providers"]] == [
+        "gmail",
+        "outlook_mail",
+    ]
+    assert result["providers"][0]["error"] is True
+    assert result["providers"][1]["provider"] == "outlook_mail"
+
+
+def test_email_search_endpoint_returns_200_when_gmail_fails(monkeypatch) -> None:
+    def fail_gmail(self, query):
+        raise RuntimeError("secret failure")
+
+    monkeypatch.setattr(
+        "app.tools.productivity.providers.gmail_provider.GmailProvider.search_emails",
+        fail_gmail,
+    )
+
+    response = client.get("/assistant/email/search", params={"q": "Max"})
+
+    assert response.status_code == 200
+    assert response.json()["providers"][0]["provider"] == "gmail"
+    assert response.json()["providers"][0]["error"] is True
+    assert response.json()["providers"][1]["provider"] == "outlook_mail"
+
+
+def test_assistant_chat_returns_german_answer_when_gmail_fails(monkeypatch) -> None:
+    def fail_gmail(self, query):
+        raise RuntimeError("secret failure")
+
+    monkeypatch.setattr(
+        "app.tools.productivity.providers.gmail_provider.GmailProvider.search_emails",
+        fail_gmail,
+    )
+
+    response = client.post(
+        "/assistant/chat", json={"message": "Habe ich neue E-Mails?"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tool"] == "email_search_all"
+    assert "Gmail ist noch nicht korrekt verbunden" in response.json()["answer"]
+    assert "v0.1" not in response.json()["answer"]
+
+
+def test_email_service_summarizes_connected_gmail_with_outlook_disconnected(monkeypatch) -> None:
+    from app.tools.productivity.email_service import EmailService
+
+    emails = [
+        {
+            "sender": f"Sender {index}",
+            "subject": f"Subject {index}",
+            "date": "Mon, 01 Jun 2026 10:00:00 +0000",
+            "snippet": "Text",
+            "is_unread": True,
+        }
+        for index in range(6)
+    ]
+
+    def gmail_results(self, query):
+        return {
+            "provider": "gmail",
+            "connected": True,
+            "emails": emails,
+            "query": query,
+            "message": "6 Gmail-Nachrichten gefunden.",
+        }
+
+    monkeypatch.setattr(
+        "app.tools.productivity.providers.gmail_provider.GmailProvider.search_emails",
+        gmail_results,
+    )
+
+    result = EmailService().search_emails("is:unread newer_than:30d")
+
+    assert result["total_email_count"] == 6
+    assert result["unread_count"] == 6
+    assert result["connected_providers"] == ["gmail"]
+    assert result["disconnected_providers"] == ["outlook_mail"]
+    assert result["message"] == (
+        "Ich habe 6 Gmail-Nachrichten gefunden. Outlook Mail ist noch nicht verbunden."
+    )
+
+
+def test_assistant_email_answer_includes_count_and_limits_to_five(monkeypatch) -> None:
+    emails = [
+        {
+            "sender": f"Sender {index}",
+            "subject": f"Subject {index}",
+            "date": f"2026-06-0{index}",
+            "snippet": "Text",
+            "is_unread": True,
+        }
+        for index in range(1, 7)
+    ]
+
+    def gmail_results(self, query):
+        return {
+            "provider": "gmail",
+            "connected": True,
+            "emails": emails,
+            "query": query,
+            "message": "6 Gmail-Nachrichten gefunden.",
+        }
+
+    monkeypatch.setattr(
+        "app.tools.productivity.providers.gmail_provider.GmailProvider.search_emails",
+        gmail_results,
+    )
+
+    response = client.post(
+        "/assistant/chat", json={"message": "Habe ich neue E-Mails?"}
+    )
+
+    answer = response.json()["answer"]
+    assert "Ich habe 6 Gmail-Nachrichten gefunden" in answer
+    assert "1. Sender 1: Subject 1" in answer
+    assert "5. Sender 5: Subject 5" in answer
+    assert "6. Sender 6" not in answer
+
+
+def test_clean_email_snippet_removes_invisible_characters_and_html_entities() -> None:
+    from app.tools.productivity.email_service import clean_email_snippet
+
+    dirty = "\u200b\u200cHello&nbsp;&nbsp;World&#39;s\n\n" + ("x" * 300)
+    cleaned = clean_email_snippet(dirty)
+
+    assert "\u200b" not in cleaned
+    assert "\u200c" not in cleaned
+    assert "World's" in cleaned
+    assert "  " not in cleaned
+    assert len(cleaned) <= 180
 
 
 def test_assistant_email_search_routes_unread_to_gmail_query(monkeypatch) -> None:
