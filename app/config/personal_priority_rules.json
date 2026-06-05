@@ -35,6 +35,42 @@
       "priority": "medium",
       "category": "job",
       "reason": "LinkedIn-Jobs sind potenziell relevant, aber nicht kritisch."
+    },
+    {
+      "match": "voyageprive",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "Reiseangebote und Urlaubswerbung sind nicht wichtig."
+    },
+    {
+      "match": "conrad",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "Produkt- und Campingwerbung ist nicht wichtig."
+    },
+    {
+      "match": "ea.com",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "EA-Sports-Werbung ist nicht wichtig."
+    },
+    {
+      "match": "anycubic",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "Produktwerbung ist nicht wichtig."
+    },
+    {
+      "match": "wonda",
+      "priority": "low",
+      "category": "info",
+      "reason": "Wonda-Vorschlaege sind nur niedrige Prioritaet."
+    },
+    {
+      "match": "openai",
+      "priority": "high",
+      "category": "account_security",
+      "reason": "OpenAI-Konto- und Datenexport-Ereignisse sind sicherheitsrelevant."
     }
   ],
   "subject_rules": [
@@ -61,6 +97,48 @@
       "priority": "low",
       "category": "marketing",
       "reason": "Produktwerbung."
+    },
+    {
+      "match": "Datenexport",
+      "priority": "high",
+      "category": "account_security",
+      "reason": "Ein gestarteter Datenexport sollte geprueft werden."
+    },
+    {
+      "match": "data export",
+      "priority": "high",
+      "category": "account_security",
+      "reason": "Ein gestarteter Datenexport sollte geprueft werden."
+    },
+    {
+      "match": "export wurde gestartet",
+      "priority": "high",
+      "category": "account_security",
+      "reason": "Ein gestarteter Datenexport sollte geprueft werden."
+    },
+    {
+      "match": "Roadtrip",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "Reisewerbung."
+    },
+    {
+      "match": "Malediven",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "Reisewerbung."
+    },
+    {
+      "match": "Camping",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "Camping-Werbung."
+    },
+    {
+      "match": "Spiele internationalen Fussball",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "Spielewerbung."
     }
   ]
 }

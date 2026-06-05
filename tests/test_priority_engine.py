@@ -19,7 +19,7 @@ def test_github_oauth_email_is_high_security() -> None:
     )
 
     assert result["priority"] == "high"
-    assert result["category"] == "security"
+    assert result["category"] == "account_security"
     assert "OAuth-App" in result["recommended_action"]
 
 
@@ -166,7 +166,7 @@ def test_email_score_endpoint_returns_classification() -> None:
 
     assert response.status_code == 200
     assert response.json()["priority"] == "high"
-    assert response.json()["category"] == "security"
+    assert response.json()["category"] == "account_security"
 
 
 def test_lotto24_is_low_marketing_from_personal_rule() -> None:
@@ -293,3 +293,183 @@ def test_delete_personal_rule_works(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 200
     assert not any(item["match"] == "lotto24" for item in response.json()["sender_rules"])
+
+
+def test_openai_data_export_email_is_high_account_security() -> None:
+    result = PriorityEngine().classify_email(
+        {
+            "sender": "OpenAI",
+            "subject": "Dein Datenexport wurde gestartet",
+            "snippet": "A data export was started for your account.",
+        }
+    )
+
+    assert result["priority"] == "high"
+    assert result["category"] == "account_security"
+    assert result["recommended_action"] == "Pruefen, ob du den Datenexport selbst gestartet hast."
+
+
+def test_openai_data_export_appears_in_important_first() -> None:
+    answer = format_daily_briefing(_daily_results_with_emails([
+        {
+            "sender": "OpenAI",
+            "subject": "Dein Datenexport wurde gestartet",
+            "snippet": "A data export was started for your account.",
+        }
+    ]))
+
+    important = answer.split("Posteingang:", 1)[0]
+    assert "OpenAI" in important
+    assert "OpenAI-Datenexport pruefen." in answer
+
+
+def test_ecoflow_stale_only_warning_not_in_important_first_when_security_exists() -> None:
+    results = _daily_results_with_emails([
+        {
+            "sender": "OpenAI",
+            "subject": "Data export started",
+            "snippet": "Export started for your account.",
+        }
+    ])
+    results["ecoflow_energy_overview"] = {
+        "human_status": {"overall": "warning", "headline": "EcoFlow laeuft, aber einige Werte sind veraltet.", "details": []},
+        "warning_count_by_severity": 2,
+        "critical_count": 0,
+        "soc_percent": 50,
+        "warnings": [{"code": "stale_value", "severity": "warning", "message": "Der Tageswert Solarenergie heute ist veraltet."}],
+    }
+
+    answer = format_daily_briefing(results)
+
+    important = answer.split("Posteingang:", 1)[0]
+    assert "EcoFlow" not in important
+    assert "EcoFlow-Tageswerte bei Gelegenheit pruefen." in answer
+
+
+def test_ecoflow_low_battery_appears_in_important_first(monkeypatch) -> None:
+    monkeypatch.setenv("ECOFLOW_LOW_BATTERY_THRESHOLD_PERCENT", "20")
+    results = _daily_results_with_emails([])
+    results["ecoflow_energy_overview"] = {
+        "human_status": {"overall": "warning", "headline": "EcoFlow Batterie niedrig.", "details": ["Batterie: 15 %"]},
+        "warning_count_by_severity": 0,
+        "critical_count": 0,
+        "soc_percent": 15,
+        "warnings": [],
+    }
+
+    answer = format_daily_briefing(results)
+
+    important = answer.split("Posteingang:", 1)[0]
+    assert "EcoFlow Batterie niedrig" in important
+    assert "EcoFlow-Batterie pruefen." in answer
+
+
+def test_daily_briefing_does_not_use_generic_short_check_action() -> None:
+    answer = format_daily_briefing(_daily_results_with_emails([
+        {"sender": "Max Mustermann", "subject": "Hallo", "snippet": ""},
+    ]))
+
+    assert "Kurz pruefen" not in answer
+
+
+def test_voyage_prive_travel_deal_is_low_marketing() -> None:
+    result = PriorityEngine().classify_email(
+        {
+            "sender": '"Laura, Reiseexpertin von Voyage Prive" <news@email.voyageprive.de>',
+            "subject": "Roadtrip Hawaii, Neueroeffnung 5* Tuerkei, All-in Barbados -80%, Gardasee ab 56 EUR, Malediven ab 799 EUR",
+            "snippet": "Urlaub, Reise und Angebote.",
+        }
+    )
+
+    assert result["priority"] == "low"
+    assert result["category"] == "marketing"
+    assert result["category"] != "account_security"
+    assert result["confidence"] in {"high", "medium"}
+
+
+def test_ea_sports_fc_promotion_is_low_marketing() -> None:
+    result = PriorityEngine().classify_email(
+        {"sender": "EA <news@ea.com>", "subject": "Spiele internationalen Fussball in EA SPORTS FC", "snippet": "Angebot nur heute"}
+    )
+
+    assert result["priority"] == "low"
+    assert result["category"] == "marketing"
+
+
+def test_conrad_camping_promotion_is_low_marketing() -> None:
+    result = PriorityEngine().classify_email(
+        {"sender": "Conrad", "subject": "Camping Angebote und Deals", "snippet": "Rabatt auf Outdoor Produkte"}
+    )
+
+    assert result["priority"] == "low"
+    assert result["category"] == "marketing"
+
+
+def test_wonda_suggestions_are_low_info() -> None:
+    result = PriorityEngine().classify_email(
+        {"sender": "Wonda", "subject": "Neue Vorschlaege fuer dich", "snippet": "Suggestions and updates"}
+    )
+
+    assert result["priority"] == "low"
+    assert result["category"] == "info"
+
+
+def test_news_sender_with_discount_symbols_is_not_high() -> None:
+    result = PriorityEngine().classify_email(
+        {"sender": "news@email.voyageprive.de", "subject": "Malediven -80% ab 799 EUR", "snippet": ""}
+    )
+
+    assert result["priority"] != "high"
+    assert result["category"] == "marketing"
+
+
+def test_unknown_noreply_news_sender_defaults_to_info() -> None:
+    result = PriorityEngine().classify_email(
+        {"sender": "noreply@unknown.example", "subject": "Produkt Update", "snippet": "Neue Vorschlaege"}
+    )
+
+    assert result["priority"] == "info"
+    assert result["category"] == "unknown"
+
+
+def test_daily_briefing_excludes_marketing_from_important_first_precision() -> None:
+    answer = format_daily_briefing(_daily_results_with_emails([
+        {
+            "sender": "news@email.voyageprive.de",
+            "subject": "Roadtrip Hawaii, Malediven -80%",
+            "snippet": "Reise Angebot",
+        },
+        {"sender": "EA <news@ea.com>", "subject": "Spiele internationalen Fussball", "snippet": ""},
+    ]))
+
+    important = answer.split("Posteingang:", 1)[0]
+    assert "Voyage" not in important
+    assert "EA" not in important
+    assert "Keine wirklich wichtigen neuen E-Mails erkannt." in answer
+    assert "Kontoaktion" not in answer
+
+
+def _daily_results_with_emails(emails: list[dict]) -> dict:
+    return {
+        "gmail_unread_recent": {
+            "providers": [{"provider": "gmail", "connected": True, "emails": emails}],
+            "total_email_count": len(emails),
+            "unread_count": len(emails),
+        },
+        "home_assistant_get_problems": {
+            "critical_count": 0,
+            "warning_count": 0,
+            "informational_count": 0,
+            "critical": [],
+            "warning": [],
+            "informational": [],
+        },
+        "timetree_today": {"events": []},
+        "ecoflow_energy_overview": {
+            "human_status": {"overall": "ok", "headline": "EcoFlow laeuft.", "details": []},
+            "warnings": [],
+            "critical_count": 0,
+            "warning_count_by_severity": 0,
+            "soc_percent": 80,
+        },
+    }

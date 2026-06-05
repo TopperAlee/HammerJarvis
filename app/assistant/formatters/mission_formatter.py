@@ -13,7 +13,7 @@ def format_daily_briefing(results: dict[str, Any]) -> str:
         for index, item in enumerate(priorities[:5], start=1):
             lines.append(f"{index}. {_priority_sentence(item)}")
     else:
-        lines.append("1. Keine kritischen Punkte aus den lokalen Werkzeugen.")
+        lines.append("1. Keine wirklich wichtigen neuen E-Mails erkannt.")
 
     lines.append("")
     lines.extend(_email_lines(results.get("gmail_unread_recent", {}), "Posteingang:", include_priority=True))
@@ -186,11 +186,53 @@ def _priority_sentence(item: dict[str, Any]) -> str:
 
 
 def _recommended_steps(priorities: list[dict[str, Any]], results: dict[str, Any]) -> list[str]:
-    steps = [str(item.get("recommended_action")) for item in priorities[:5] if item.get("recommended_action")]
+    steps = [_specific_next_step(item) for item in priorities[:5] if item.get("recommended_action")]
     ha = results.get("home_assistant_get_problems", {})
     if isinstance(ha, dict) and ha.get("warning_count", 0):
-        steps.append("Home-Assistant-Warnungen pruefen.")
+        if _has_backup_warning(ha):
+            steps.append("Home-Assistant-Backup-Konfiguration pruefen.")
+        else:
+            steps.append("Home-Assistant-Warnungen pruefen.")
+    ecoflow = results.get("ecoflow_energy_overview", {})
+    if _has_stale_ecoflow_values(ecoflow):
+        steps.append("EcoFlow-Tageswerte bei Gelegenheit pruefen.")
     return steps or ["Keine direkte Aktion noetig."]
+
+
+def _specific_next_step(item: dict[str, Any]) -> str:
+    title = str(item.get("title", "")).lower()
+    category = str(item.get("category", ""))
+    reason = str(item.get("reason", "")).lower()
+    if "github" in title and ("oauth" in title or "oauth" in reason):
+        return "GitHub-OAuth-App pruefen."
+    if "openai" in title and ("datenexport" in title or "data export" in title or "export" in title):
+        return "OpenAI-Datenexport pruefen."
+    if category == "account_security":
+        return "Kontoaktion pruefen."
+    if category == "academy" or "fernakademie" in title:
+        return "Fernakademie-Nachricht oeffnen."
+    if item.get("type") == "ecoflow" and "batterie" in reason:
+        return "EcoFlow-Batterie pruefen."
+    if item.get("type") == "ecoflow":
+        return "EcoFlow-kritische Entity pruefen."
+    return str(item.get("recommended_action"))
+
+
+def _has_stale_ecoflow_values(ecoflow: Any) -> bool:
+    if not isinstance(ecoflow, dict):
+        return False
+    return any(
+        isinstance(warning, dict) and warning.get("code") == "stale_value"
+        for warning in ecoflow.get("warnings", [])
+    )
+
+
+def _has_backup_warning(ha: dict[str, Any]) -> bool:
+    for entity in ha.get("warning", []):
+        text = f"{entity.get('entity_id', '')} {entity.get('friendly_name', '')} {entity.get('message', '')}".lower()
+        if "backup" in text:
+            return True
+    return False
 
 
 def _priority_label(priority: str) -> str:
