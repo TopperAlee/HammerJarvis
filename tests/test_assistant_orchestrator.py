@@ -18,6 +18,7 @@ def disable_real_gmail(monkeypatch, tmp_path):
     monkeypatch.setenv("GOOGLE_GMAIL_TOKEN_FILE", str(tmp_path / "gmail_token.json"))
     monkeypatch.setenv("TIMETREE_ENABLED", "false")
     monkeypatch.setenv("TIMETREE_ICS_FILE", str(tmp_path / "timetree.ics"))
+    monkeypatch.setenv("LLM_ENABLED", "false")
 
 
 def test_assistant_chat_returns_200() -> None:

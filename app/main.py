@@ -1,3 +1,4 @@
+import os
 from typing import Any
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from pydantic import BaseModel, Field
 from app.agent.core import HammerJarvisCore
 from app.agent.permissions import classify_action
 from app.assistant.orchestrator import AssistantOrchestrator
+from app.assistant.llm_client import LLMClient, sanitize_identity_response
+from app.assistant.system_prompt import SYSTEM_PROMPT
 from app.logging_utils.audit import write_audit_log
 from app.tools.home_assistant import HomeAssistantTool
 from app.tools.productivity.calendar_service import CalendarService
@@ -30,6 +33,10 @@ class ChatRequest(BaseModel):
 class AssistantChatRequest(BaseModel):
     message: str = Field(min_length=1)
     confirm: bool = False
+
+
+class LLMTestRequest(BaseModel):
+    message: str = Field(min_length=1)
 
 
 class EntityActionRequest(BaseModel):
@@ -69,6 +76,98 @@ def assistant_chat(request: AssistantChatRequest) -> dict[str, Any]:
         )
     except Exception as exc:
         raise _to_http_exception(exc) from exc
+
+
+@app.get("/assistant/llm/status")
+def assistant_llm_status() -> dict[str, Any]:
+    llm = LLMClient()
+    return {
+        "enabled": llm.is_enabled(),
+        "provider": llm.provider_name(),
+        "model": llm.model_name(),
+        "base_url": llm.base_url(),
+        "api_key_configured": bool(llm.api_key),
+        "tool_mode": os.getenv("LLM_TOOL_MODE", "true").strip().lower() == "true",
+        "available": llm.is_available(),
+        "api_key_required": llm.api_key_required(),
+    }
+
+
+@app.post("/assistant/llm/test")
+def assistant_llm_test(request: LLMTestRequest) -> dict[str, Any]:
+    llm = LLMClient()
+    if not llm.is_available():
+        return {
+            "enabled": llm.is_enabled(),
+            "available": False,
+            "provider": llm.provider_name(),
+            "message": "LLM ist deaktiviert oder die Provider-Konfiguration fehlt.",
+        }
+    try:
+        response = llm.create_response_with_tools(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": request.message},
+            ],
+            [],
+        )
+        return {
+            "enabled": True,
+            "available": True,
+            "provider": llm.provider_name(),
+            "answer": sanitize_identity_response(
+                request.message,
+                response.get("text", ""),
+            ),
+        }
+    except Exception:
+        if llm.provider_name() == "ollama":
+            return {
+                "enabled": True,
+                "available": False,
+                "provider": "ollama",
+                "message": (
+                    "Ollama ist nicht erreichbar. Bitte starte Ollama und pruefe "
+                    "http://localhost:11434."
+                ),
+            }
+        return {
+            "enabled": True,
+            "available": False,
+            "message": "LLM-Anbindung ist aktuell nicht erreichbar.",
+        }
+
+
+@app.get("/assistant/ollama/status")
+def assistant_ollama_status() -> dict[str, Any]:
+    llm = LLMClient()
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    tags_url = base_url.replace("/v1", "") + "/api/tags"
+    model = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+    try:
+        response = requests.get(tags_url, timeout=3)
+        response.raise_for_status()
+        models = response.json().get("models", [])
+        installed = any(item.get("name") == model for item in models)
+        return {
+            "provider": "ollama",
+            "reachable": True,
+            "model": model,
+            "base_url": base_url,
+            "message": (
+                "Ollama ist erreichbar und das Modell ist installiert."
+                if installed
+                else "Ollama ist erreichbar, aber das konfigurierte Modell wurde nicht gefunden."
+            ),
+        }
+    except Exception:
+        return {
+            "provider": "ollama",
+            "reachable": False,
+            "model": model,
+            "base_url": base_url,
+            "message": "Ollama ist nicht erreichbar. Bitte starte Ollama und pruefe http://localhost:11434.",
+        }
 
 
 @app.get("/assistant/providers")

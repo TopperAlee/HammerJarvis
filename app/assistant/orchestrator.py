@@ -1,9 +1,13 @@
+import json
+import os
 import re
 from typing import Any
 
 from app.agent.core import normalize_message
 from app.agent.permissions import ActionRisk
-from app.assistant.llm_client import LLMClient
+from app.assistant.formatters.ecoflow_formatter import format_ecoflow_energy_answer
+from app.assistant.llm_client import LLMClient, sanitize_identity_response
+from app.assistant.system_prompt import SYSTEM_PROMPT
 from app.assistant.tool_registry import ToolRegistry
 from app.logging_utils.audit import write_audit_log
 from app.tools.productivity.email_service import clean_email_snippet
@@ -20,20 +24,155 @@ class AssistantOrchestrator:
 
     def handle_message(self, message: str, confirm: bool = False) -> dict[str, Any]:
         normalized = normalize_message(message)
+        if _is_email_send_intent(normalized) or _is_email_create_intent(normalized):
+            return self._handle_rule_based(message, normalized, confirm)
+        known_route = _known_tool_route(message, normalized)
+        if known_route:
+            tool_name, arguments = known_route
+            executed = self.registry.execute_tool(tool_name, arguments, confirm=confirm)
+            tool_result = executed.get("result", executed)
+            return self.answer_with_tool_result(message, tool_name, tool_result)
 
+        if self.llm_client.is_available():
+            try:
+                return self._handle_llm(message, confirm)
+            except Exception:
+                fallback = self._handle_rule_based(message, normalized, confirm)
+                return {
+                    **fallback,
+                    "mode": "rule_based_fallback",
+                    "answer": (
+                        "LLM-Anbindung ist aktuell nicht erreichbar, ich nutze "
+                        "den lokalen Fallback. "
+                        f"{fallback.get('answer', '')}"
+                    ).strip(),
+                }
+        return self._handle_rule_based(message, normalized, confirm)
+
+    def answer_with_tool_result(
+        self,
+        user_message: str,
+        tool_name: str,
+        tool_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        fallback_answer = _format_tool_result(tool_name, tool_result)
+        if tool_name == "ecoflow_energy_overview":
+            return {
+                "mode": "rule_based",
+                "tool": _public_tool_name(tool_name),
+                "executed_tool": tool_name,
+                "answer": fallback_answer,
+                "risk": ActionRisk.GREEN,
+                "result": tool_result,
+            }
+        if self.llm_client.is_available():
+            try:
+                response = self.llm_client.create_response_with_tools(
+                    [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_message},
+                        {
+                            "role": "user",
+                            "content": (
+                                "Antworte ausschliesslich auf Basis dieses "
+                                "Tool-Ergebnisses. Behaupte nicht, dass du keine "
+                                "Echtzeitdaten abrufen kannst.\n"
+                                f"Tool: {tool_name}\n"
+                                f"Ergebnis: {json.dumps(tool_result, ensure_ascii=False)}"
+                            ),
+                        },
+                    ],
+                    [],
+                )
+                answer = sanitize_identity_response(
+                    user_message,
+                    response.get("text") or "",
+                )
+                if answer and not _contains_realtime_denial(answer):
+                    return {
+                        "mode": "llm",
+                        "tool": _public_tool_name(tool_name),
+                        "executed_tool": tool_name,
+                        "answer": answer,
+                        "risk": ActionRisk.GREEN,
+                        "result": tool_result,
+                    }
+            except Exception:
+                pass
+        return {
+            "mode": "rule_based",
+            "tool": _public_tool_name(tool_name),
+            "executed_tool": tool_name,
+            "answer": fallback_answer,
+            "risk": ActionRisk.GREEN,
+            "result": tool_result,
+        }
+
+    def _handle_llm(self, message: str, confirm: bool) -> dict[str, Any]:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": message},
+        ]
+        tools = self.registry.get_openai_tool_schemas()
+        first_response = self.llm_client.create_response_with_tools(messages, tools)
+        tool_calls = first_response.get("tool_calls", [])
+        if not tool_calls:
+            return {
+                "mode": "llm",
+                "tool": "general_answer",
+                "answer": sanitize_identity_response(
+                    message,
+                    first_response.get("text") or "",
+                ),
+                "risk": ActionRisk.GREEN,
+            }
+
+        max_calls = int(os.getenv("LLM_MAX_TOOL_CALLS", "5"))
+        tool_outputs = []
+        for call in tool_calls[:max_calls]:
+            output = self.registry.execute_tool(
+                str(call.get("name", "")),
+                call.get("arguments", {}) or {},
+                confirm=confirm,
+            )
+            tool_outputs.append(
+                {
+                    "tool_call_id": call.get("id"),
+                    "name": call.get("name"),
+                    "output": output,
+                }
+            )
+
+        final_response = self.llm_client.final_response_with_tool_outputs(
+            messages,
+            tool_calls[:max_calls],
+            tool_outputs,
+        )
+        return {
+            "mode": "llm",
+            "tool": "llm_orchestrator",
+            "answer": sanitize_identity_response(
+                message,
+                final_response.get("text") or "",
+            ),
+            "risk": ActionRisk.GREEN,
+            "tool_outputs": tool_outputs,
+        }
+
+    def _handle_rule_based(
+        self,
+        message: str,
+        normalized: str,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
         if _is_ecoflow_intent(normalized):
             result = self.registry.run("ecoflow_energy_overview")
-            answer = _format_ecoflow_answer(result)
+            answer = format_ecoflow_energy_answer(result)
             return self._tool_response("ecoflow_energy_overview", answer, result)
 
         if _is_home_assistant_problem_intent(normalized):
             result = self.registry.run("home_assistant_get_problems")
-            answer = (
-                "Home Assistant Diagnose: "
-                f"{result.get('critical_count', 0)} kritisch, "
-                f"{result.get('warning_count', 0)} Warnungen, "
-                f"{result.get('informational_count', 0)} Hinweise."
-            )
+            answer = _format_home_assistant_problems(result)
             return self._tool_response("home_assistant_get_problems", answer, result)
 
         if _is_timetree_intent(normalized):
@@ -69,13 +208,10 @@ class AssistantOrchestrator:
 
         if _is_email_search_intent(normalized):
             query = _build_email_search_query(message, normalized)
-            result = self.registry.run("email_search_all", query=query)
-            answer = (
-                _gmail_error_answer()
-                if _has_gmail_error(result)
-                else _format_email_answer(result)
-            )
-            return self._tool_response("email_search_all", answer, result)
+            tool_name = "gmail_unread_recent" if _is_unread_email_query(normalized) else "gmail_search"
+            result = self.registry.run(tool_name, query=query) if tool_name == "gmail_search" else self.registry.run(tool_name)
+            answer = _gmail_error_answer() if _has_gmail_error(result) else _format_email_answer(result)
+            return self._tool_response(tool_name, answer, result)
 
         if _is_calendar_create_intent(normalized):
             result = self.registry.run("calendar_create_event")
@@ -123,8 +259,44 @@ class AssistantOrchestrator:
 
 
 def _is_ecoflow_intent(message: str) -> bool:
-    energy_terms = ("ecoflow", "batterie", "solar", "pv", "strom", "energie")
-    return any(term in message for term in energy_terms)
+    return any(
+        term in message
+        for term in (
+            "ecoflow",
+            "batterie",
+            "akku",
+            "pv",
+            "solar",
+            "solarstrom",
+            "strom",
+            "energie",
+            "smart meter",
+            "smartmeter",
+            "netzleistung",
+            "verbrauch",
+        )
+    )
+
+
+def _known_tool_route(
+    original_message: str,
+    normalized_message: str,
+) -> tuple[str, dict[str, Any]] | None:
+    if _is_ecoflow_intent(normalized_message):
+        return "ecoflow_energy_overview", {}
+    if _is_email_search_intent(normalized_message):
+        if _is_unread_email_query(normalized_message):
+            return "gmail_unread_recent", {}
+        return "gmail_search", {"query": _build_email_search_query(original_message, normalized_message)}
+    if _is_timetree_intent(normalized_message):
+        return "timetree_today", {}
+    if _is_home_assistant_problem_intent(normalized_message):
+        return "home_assistant_get_problems", {}
+    return None
+
+
+def _is_unread_email_query(message: str) -> bool:
+    return "ungelesen" in message or "neue" in message or "neue mails" in message
 
 
 def _is_home_assistant_problem_intent(message: str) -> bool:
@@ -132,10 +304,9 @@ def _is_home_assistant_problem_intent(message: str) -> bool:
         "home assistant diagnose",
         "welche geraete haben probleme",
         "welche gerate haben probleme",
-        "welche geräte haben probleme",
+        "geräte probleme",
         "geraete probleme",
         "gerate probleme",
-        "geräte probleme",
         "smart home status",
         "smart-home status",
         "probleme",
@@ -145,52 +316,30 @@ def _is_home_assistant_problem_intent(message: str) -> bool:
 
 
 def _is_email_search_intent(message: str) -> bool:
-    terms = (
-        "email",
-        "mail",
-        "mails",
-        "e-mail",
-        "e-mails",
-        "posteingang",
-        "nachricht",
-        "nachrichten",
-        "gmail",
-    )
+    terms = ("email", "mail", "mails", "e-mail", "e-mails", "posteingang", "nachricht", "nachrichten", "gmail")
     return any(term in message for term in terms)
 
 
 def _build_email_search_query(original_message: str, normalized_message: str) -> str:
     if "ungelesene" in normalized_message or "neue e-mail" in normalized_message:
         return "is:unread newer_than:30d"
-
-    sender_match = re.search(
-        r"(?:e-?mails?|mails?)\s+von\s+(.+)$",
-        original_message,
-        re.I,
-    )
+    sender_match = re.search(r"(?:e-?mails?|mails?)\s+von\s+(.+)$", original_message, re.I)
     if sender_match:
         sender = sender_match.group(1).strip(" ?!.:,;")
         if sender:
             return f"from:{sender} newer_than:90d"
-
-    gmail_match = re.search(
-        r"suche\s+gmail\s+nach\s+(.+)$",
-        original_message,
-        re.I,
-    )
+    gmail_match = re.search(r"suche\s+gmail\s+nach\s+(.+)$", original_message, re.I)
     if gmail_match:
         query = gmail_match.group(1).strip()
         if query:
             return query
-
     return original_message
 
 
 def _has_gmail_error(result: dict[str, Any]) -> bool:
-    providers = result.get("providers", [])
     return any(
         item.get("provider") == "gmail" and item.get("error") is True
-        for item in providers
+        for item in result.get("providers", [])
         if isinstance(item, dict)
     )
 
@@ -206,8 +355,7 @@ def _gmail_error_answer() -> str:
 
 def _format_email_answer(result: dict[str, Any]) -> str:
     lines = [str(result.get("message", "")).strip()]
-    emails = _collect_emails(result)
-    for index, email in enumerate(emails[:5], start=1):
+    for index, email in enumerate(_collect_emails(result)[:5], start=1):
         sender = str(email.get("sender") or "Unbekannter Absender").strip()
         subject = clean_email_snippet(str(email.get("subject") or "(kein Betreff)"))
         date = str(email.get("date") or "").strip()
@@ -218,49 +366,47 @@ def _format_email_answer(result: dict[str, Any]) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def _format_gmail_unread_answer(result: dict[str, Any]) -> str:
+    if _has_gmail_error(result):
+        return _gmail_error_answer()
+    count = result.get("unread_count")
+    if count is None:
+        count = result.get("total_email_count", 0)
+    if result.get("total_email_count") == count:
+        lines = [f"Ich habe {count} Gmail-Nachrichten gefunden."]
+    else:
+        lines = [f"Ich habe {count} ungelesene Gmail-Nachrichten gefunden."]
+    for index, email in enumerate(_collect_emails(result)[:5], start=1):
+        sender = str(email.get("sender") or "Unbekannter Absender").strip()
+        subject = clean_email_snippet(str(email.get("subject") or "(kein Betreff)"))
+        lines.append(f"{index}. {sender}: {subject}")
+    return "\n".join(lines)
+
+
 def _collect_emails(result: dict[str, Any]) -> list[dict[str, Any]]:
     emails: list[dict[str, Any]] = []
     for provider in result.get("providers", []):
         if isinstance(provider, dict) and provider.get("connected") is True:
-            emails.extend(
-                email
-                for email in provider.get("emails", [])
-                if isinstance(email, dict)
-            )
+            emails.extend(email for email in provider.get("emails", []) if isinstance(email, dict))
     return emails
 
 
 def _is_email_create_intent(message: str) -> bool:
-    terms = ("schreibe", "verfasse", "erstelle", "entwurf")
-    return _is_email_search_intent(message) and any(term in message for term in terms)
+    return _is_email_search_intent(message) and any(term in message for term in ("schreibe", "verfasse", "erstelle", "entwurf"))
 
 
 def _is_email_send_intent(message: str) -> bool:
-    return _is_email_search_intent(message) and any(
-        term in message for term in ("sende", "senden", "abschicken")
-    )
+    return _is_email_search_intent(message) and any(term in message for term in ("sende", "senden", "abschicken"))
 
 
 def _is_calendar_today_intent(message: str) -> bool:
-    calendar_terms = (
-        "termin",
-        "termine",
-        "kalender",
-        "meeting",
-        "meetings",
-        "heute im kalender",
-        "was steht heute an",
-    )
+    calendar_terms = ("termin", "termine", "kalender", "meeting", "meetings", "heute im kalender", "was steht heute an")
     today_terms = ("heute", "morgen", "welche", "was steht", "habe ich")
-    return any(term in message for term in calendar_terms) and any(
-        term in message for term in today_terms
-    )
+    return any(term in message for term in calendar_terms) and any(term in message for term in today_terms)
 
 
 def _is_calendar_create_intent(message: str) -> bool:
-    return any(term in message for term in ("termin", "kalender", "meeting")) and any(
-        term in message for term in ("erstelle", "anlegen", "eintragen", "plane")
-    )
+    return any(term in message for term in ("termin", "kalender", "meeting")) and any(term in message for term in ("erstelle", "anlegen", "eintragen", "plane"))
 
 
 def _is_timetree_intent(message: str) -> bool:
@@ -274,11 +420,9 @@ def _format_timetree_today_answer(result: dict[str, Any]) -> str:
         return "Die lokale TimeTree ICS-Datei konnte nicht gelesen werden."
     if result.get("connected") is False:
         return str(result.get("message", "TimeTree ICS-Datei wurde nicht gefunden."))
-
     events = result.get("events", [])
     if not events:
         return "Heute stehen keine TimeTree-Termine in der lokalen ICS-Datei."
-
     lines = [f"Heute stehen {len(events)} TimeTree-Termine an:"]
     for index, event in enumerate(events, start=1):
         prefix = "Ganztägig" if event.get("all_day") else _format_event_time(event)
@@ -286,17 +430,54 @@ def _format_timetree_today_answer(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_home_assistant_problems(result: dict[str, Any]) -> str:
+    lines = [
+        (
+            f"Kritisch: {result.get('critical_count', 0)}, "
+            f"Warnungen: {result.get('warning_count', 0)}, "
+            f"Infos: {result.get('informational_count', 0)}"
+        )
+    ]
+    for entity in (result.get("critical", []) + result.get("warning", []))[:5]:
+        entity_id = entity.get("entity_id", "unknown")
+        state = entity.get("state", "")
+        lines.append(f"- {entity_id}: {state}".strip())
+    return "\n".join(lines)
+
+
+def _format_tool_result(tool_name: str, result: dict[str, Any]) -> str:
+    if tool_name == "ecoflow_energy_overview":
+        return format_ecoflow_energy_answer(result)
+    if tool_name == "gmail_unread_recent":
+        return _format_gmail_unread_answer(result)
+    if tool_name == "gmail_search":
+        return _gmail_error_answer() if _has_gmail_error(result) else _format_email_answer(result)
+    if tool_name == "timetree_today":
+        return _format_timetree_today_answer(result)
+    if tool_name == "home_assistant_get_problems":
+        return _format_home_assistant_problems(result)
+    return str(result.get("message", "Werkzeug wurde ausgefuehrt."))
+
+
+def _public_tool_name(tool_name: str) -> str:
+    if tool_name in {"gmail_unread_recent", "gmail_search"}:
+        return "email_search_all"
+    return tool_name
+
+
+def _contains_realtime_denial(answer: str) -> bool:
+    normalized = answer.lower()
+    return any(
+        phrase in normalized
+        for phrase in (
+            "keine echtzeitdaten",
+            "keine live-daten",
+            "nicht abrufen",
+            "kann aktuell keine",
+        )
+    )
+
+
 def _format_event_time(event: dict[str, Any]) -> str:
-    try:
-        return event["start"][11:16] if "T" in event["start"] else "Ganztägig"
-    except Exception:
-        return ""
+    return event["start"][11:16] if "T" in event.get("start", "") else "Ganztägig"
 
-
-def _format_ecoflow_answer(overview: dict[str, Any]) -> str:
-    human_status = overview.get("human_status", {})
-    headline = human_status.get("headline") or overview.get("summary")
-    details = human_status.get("details", [])
-    if details:
-        return f"{headline}\n" + "\n".join(f"- {detail}" for detail in details)
-    return str(headline or "EcoFlow Energieuebersicht ist verfuegbar.")

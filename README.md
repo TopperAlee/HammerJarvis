@@ -197,6 +197,37 @@ GET http://127.0.0.1:8001/assistant/timetree/today
 TimeTree-Schreiben und das Erstellen von TimeTree-Terminen sind nicht unterstuetzt.
 Speichere keine TimeTree-Benutzernamen, Passwoerter oder sonstigen Zugangsdaten in Hammer Jarvis.
 
+## LLM Core / OpenAI
+
+Hammer Jarvis v0.7 kann OpenAI als zentrale Orchestrierungsschicht verwenden.
+Die OpenAI-Anbindung laeuft nur serverseitig im lokalen Backend.
+Der API-Key wird nicht an den Browser gesendet.
+
+Aktiviere die LLM-Anbindung in deiner lokalen `.env`:
+
+```text
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-5.2
+LLM_ENABLED=true
+LLM_TOOL_MODE=true
+LLM_MAX_TOOL_CALLS=5
+```
+
+Der Status ist lokal abrufbar:
+
+```text
+GET http://127.0.0.1:8001/assistant/llm/status
+POST http://127.0.0.1:8001/assistant/llm/test
+```
+
+Hammer Jarvis laesst das LLM keine externen APIs direkt aufrufen.
+Alle Aktionen laufen ueber die lokale Tool Registry und die bestehende Risiko-/Bestaetigungslogik.
+Gruene Leseaktionen koennen direkt ausgefuehrt werden.
+Gelbe Aktionen brauchen eine Bestaetigung.
+Rote Aktionen wie E-Mail-Senden, PLC-Schreiben oder Dateien loeschen bleiben blockiert.
+
+Ohne `OPENAI_API_KEY` oder mit `LLM_ENABLED=false` nutzt Hammer Jarvis den lokalen regelbasierten Fallback.
+
 ## Testen mit `/docs`
 
 Oeffne `http://127.0.0.1:8001/docs` im Browser.

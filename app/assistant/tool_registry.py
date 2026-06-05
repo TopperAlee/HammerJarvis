@@ -2,9 +2,11 @@ from typing import Any
 
 from app.agent.permissions import ActionRisk
 from app.assistant.schemas import RegisteredTool
+from app.logging_utils.audit import write_audit_log
 from app.tools.home_assistant import HomeAssistantTool
 from app.tools.productivity.calendar_service import CalendarService
 from app.tools.productivity.email_service import EmailService
+from app.tools.productivity.providers.gmail_provider import GmailProvider
 from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
 
 
@@ -19,6 +21,82 @@ class ToolRegistry:
     def run(self, name: str, **kwargs: Any) -> dict[str, Any]:
         tool = self.get(name)
         return tool.function(**kwargs)
+
+    def execute_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        tool = self.get(name)
+        write_audit_log(
+            "assistant_execute_tool",
+            {"tool": name, "risk": tool.risk, "requires_confirmation": tool.requires_confirmation},
+        )
+        if tool.risk == ActionRisk.RED:
+            return {"tool": name, "risk": tool.risk, "blocked": True}
+        if tool.risk == ActionRisk.YELLOW and not confirm:
+            return {
+                "tool": name,
+                "risk": tool.risk,
+                "confirmation_required": True,
+            }
+        try:
+            result = tool.function(**(arguments or {}))
+        except TypeError:
+            result = tool.function()
+        return {
+            "tool": name,
+            "risk": tool.risk,
+            "executed": True,
+            "result": result,
+        }
+
+    def get_openai_tool_schemas(self) -> list[dict[str, Any]]:
+        schemas = {
+            "ecoflow_energy_overview": (
+                "Reads current EcoFlow energy status from Home Assistant.",
+                {},
+            ),
+            "home_assistant_get_problems": (
+                "Gets classified Home Assistant problem entities.",
+                {},
+            ),
+            "gmail_search": (
+                "Searches Gmail read-only using a Gmail query.",
+                {"query": {"type": "string"}},
+            ),
+            "gmail_unread_recent": (
+                "Gets recent unread Gmail messages.",
+                {},
+            ),
+            "timetree_today": (
+                "Reads today's TimeTree events from local ICS import.",
+                {},
+            ),
+            "assistant_capabilities": (
+                "Returns what Hammer Jarvis can currently do.",
+                {},
+            ),
+            "general_local_status": (
+                "Returns a compact status of connected services.",
+                {},
+            ),
+        }
+        return [
+            {
+                "type": "function",
+                "name": name,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": list(properties.keys()),
+                    "additionalProperties": False,
+                },
+            }
+            for name, (description, properties) in schemas.items()
+        ]
 
     def register(
         self,
@@ -43,6 +121,7 @@ class ToolRegistry:
         email_service = EmailService()
         calendar_service = CalendarService()
         timetree_provider = TimeTreeProvider()
+        gmail_provider = GmailProvider()
 
         self.register(
             "home_assistant_get_problems",
@@ -66,6 +145,22 @@ class ToolRegistry:
             ActionRisk.GREEN,
             email_service.search_emails,
             {"query": "string"},
+            False,
+        )
+        self.register(
+            "gmail_search",
+            "Durchsucht Gmail read-only mit einer Gmail Query.",
+            ActionRisk.GREEN,
+            email_service.search_emails,
+            {"query": "string"},
+            False,
+        )
+        self.register(
+            "gmail_unread_recent",
+            "Liest aktuelle ungelesene Gmail-Nachrichten.",
+            ActionRisk.GREEN,
+            lambda: email_service.search_emails("is:unread newer_than:30d"),
+            {},
             False,
         )
         self.register(
@@ -132,3 +227,33 @@ class ToolRegistry:
             {"message": "string"},
             False,
         )
+        self.register(
+            "assistant_capabilities",
+            "Beschreibt aktuelle Hammer Jarvis Faehigkeiten.",
+            ActionRisk.GREEN,
+            self._assistant_capabilities,
+            {},
+            False,
+        )
+        self.register(
+            "general_local_status",
+            "Kompakter lokaler Integrationsstatus.",
+            ActionRisk.GREEN,
+            lambda: {
+                "gmail": gmail_provider.status(),
+                "timetree": timetree_provider.status(),
+                "outlook": "mock_disabled",
+            },
+            {},
+            False,
+        )
+
+    def _assistant_capabilities(self) -> dict[str, Any]:
+        return {
+            "message": (
+                "Hammer Jarvis kann EcoFlow und Home Assistant lesen, Gmail "
+                "read-only durchsuchen, TimeTree per lokaler ICS-Datei lesen "
+                "und vorbereitete Kalender-/E-Mail-Werkzeuge sicher verwalten. "
+                "E-Mail-Senden, PLC-Schreiben und Datei-Loeschen sind blockiert."
+            )
+        }
