@@ -360,7 +360,7 @@ def test_ecoflow_low_battery_appears_in_important_first(monkeypatch) -> None:
     answer = format_daily_briefing(results)
 
     important = answer.split("Posteingang:", 1)[0]
-    assert "EcoFlow Batterie niedrig" in important
+    assert "EcoFlow-Batterie ist niedrig: 15 %" in important
     assert "EcoFlow-Batterie pruefen." in answer
 
 

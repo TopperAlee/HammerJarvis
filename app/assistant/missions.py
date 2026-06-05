@@ -10,6 +10,7 @@ from app.assistant.formatters.mission_formatter import (
     format_inbox_briefing,
 )
 from app.assistant.tool_registry import ToolRegistry
+from app.assistant.watchers import WatcherController
 from app.logging_utils.audit import write_audit_log
 
 
@@ -87,6 +88,7 @@ class MissionController:
         results = self._execute_tools(
             ["gmail_unread_recent", "timetree_today", "home_assistant_get_problems", "ecoflow_energy_overview"]
         )
+        results["watcher_alerts"] = {"alerts": WatcherController(registry=self.registry).list_alerts()}
         return self._mission_result(
             "daily_briefing",
             format_daily_briefing(results),

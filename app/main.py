@@ -22,6 +22,7 @@ from app.config.personal_priority_rules import (
     remove_rule,
 )
 from app.config.priority_rules import load_priority_rules
+from app.assistant.watchers import WatcherController
 from app.logging_utils.audit import write_audit_log
 from app.tools.home_assistant import HomeAssistantTool
 from app.tools.productivity.calendar_service import CalendarService
@@ -33,6 +34,34 @@ from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
 app = FastAPI(title="Hammer Jarvis", version="0.1")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+_watcher_scheduler: Any = None
+
+
+@app.on_event("startup")
+def start_watcher_scheduler() -> None:
+    global _watcher_scheduler
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return
+    if os.getenv("WATCHER_ENABLED", "false").strip().lower() != "true":
+        return
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+    except Exception:
+        write_audit_log("watcher_scheduler_unavailable", {})
+        return
+    interval = int(os.getenv("WATCHER_INTERVAL_SECONDS", "300"))
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(lambda: WatcherController().run_once(), "interval", seconds=interval)
+    scheduler.start()
+    _watcher_scheduler = scheduler
+
+
+@app.on_event("shutdown")
+def stop_watcher_scheduler() -> None:
+    global _watcher_scheduler
+    if _watcher_scheduler is not None:
+        _watcher_scheduler.shutdown(wait=False)
+        _watcher_scheduler = None
 
 
 class ChatRequest(BaseModel):
@@ -149,6 +178,39 @@ def assistant_remove_personal_rule(request: PersonalPriorityRemoveRequest) -> di
 @app.post("/assistant/priority/email-score")
 def assistant_priority_email_score(request: EmailScoreRequest) -> dict[str, Any]:
     return PriorityEngine().classify_email(request.model_dump())
+
+
+@app.get("/assistant/watchers/rules")
+def assistant_watcher_rules() -> dict[str, Any]:
+    return WatcherController().load_rules()
+
+
+@app.post("/assistant/watchers/run")
+def assistant_watchers_run() -> dict[str, Any]:
+    return WatcherController().run_once()
+
+
+@app.get("/assistant/watchers/alerts")
+def assistant_watcher_alerts() -> dict[str, Any]:
+    return {"alerts": WatcherController().list_alerts()}
+
+
+@app.post("/assistant/watchers/alerts/{alert_id}/ack")
+def assistant_watcher_ack(alert_id: str) -> dict[str, Any]:
+    try:
+        return WatcherController().acknowledge_alert(alert_id)
+    except Exception as exc:
+        raise _to_http_exception(exc) from exc
+
+
+@app.delete("/assistant/watchers/alerts")
+def assistant_watcher_clear() -> dict[str, bool]:
+    return WatcherController().clear_alerts()
+
+
+@app.get("/assistant/watchers/status")
+def assistant_watcher_status() -> dict[str, Any]:
+    return WatcherController().status()
 
 
 @app.get("/assistant/llm/status")

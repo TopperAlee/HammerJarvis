@@ -1,0 +1,37 @@
+{
+  "rules": [
+    {
+      "id": "ecoflow_low_battery",
+      "enabled": true,
+      "type": "ecoflow_low_battery",
+      "threshold_percent": 20,
+      "severity": "high",
+      "cooldown_minutes": 60,
+      "message": "EcoFlow-Batterie ist unter 20 %."
+    },
+    {
+      "id": "home_assistant_critical",
+      "enabled": true,
+      "type": "home_assistant_critical",
+      "severity": "critical",
+      "cooldown_minutes": 30,
+      "message": "Home Assistant meldet ein echtes kritisches Problem."
+    },
+    {
+      "id": "security_email",
+      "enabled": true,
+      "type": "gmail_security_email",
+      "severity": "high",
+      "cooldown_minutes": 120,
+      "message": "Neue sicherheitsrelevante E-Mail erkannt."
+    },
+    {
+      "id": "timetree_today",
+      "enabled": true,
+      "type": "timetree_today_events",
+      "severity": "info",
+      "cooldown_minutes": 240,
+      "message": "Heute gibt es TimeTree-Termine."
+    }
+  ]
+}

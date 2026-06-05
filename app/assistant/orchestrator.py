@@ -10,6 +10,7 @@ from app.assistant.llm_client import LLMClient, sanitize_identity_response
 from app.assistant.missions import MissionController
 from app.assistant.system_prompt import SYSTEM_PROMPT
 from app.assistant.tool_registry import ToolRegistry
+from app.assistant.watchers import WatcherController
 from app.config.personal_priority_rules import add_sender_rule
 from app.logging_utils.audit import write_audit_log
 from app.tools.productivity.email_service import clean_email_snippet
@@ -31,6 +32,9 @@ class AssistantOrchestrator:
         priority_feedback = _handle_priority_feedback(message)
         if priority_feedback:
             return priority_feedback
+        watcher_response = _handle_watcher_command(normalized)
+        if watcher_response:
+            return watcher_response
         mission_controller = MissionController(registry=self.registry)
         mission_name = mission_controller.detect_mission(message)
         if mission_name:
@@ -562,6 +566,35 @@ def _priority_label(priority: str) -> str:
         "low": "niedrige Prioritaet",
         "info": "Info-Prioritaet",
     }.get(priority, priority)
+
+
+def _handle_watcher_command(normalized: str) -> dict[str, Any] | None:
+    if any(term in normalized for term in ("pruefe alles", "prüfe alles", "starte ueberwachung", "starte überwachung")):
+        result = WatcherController().run_once()
+        return {
+            "mode": "rule_based",
+            "tool": "watchers_run",
+            "answer": f"Ich habe die Ueberwachung geprueft. Neue Hinweise: {result['created_count']}.",
+            "risk": ActionRisk.GREEN,
+            "result": result,
+        }
+    if any(term in normalized for term in ("welche hinweise gibt es", "hast du warnungen", "zeige alerts")):
+        alerts = WatcherController().list_alerts()
+        if not alerts:
+            answer = "Aktuell gibt es keine aktiven proaktiven Hinweise."
+        else:
+            lines = [f"Aktive Hinweise: {len(alerts)}"]
+            for alert in alerts[:5]:
+                lines.append(f"- {alert.get('title')}: {alert.get('message')}")
+            answer = "\n".join(lines)
+        return {
+            "mode": "rule_based",
+            "tool": "watchers_alerts",
+            "answer": answer,
+            "risk": ActionRisk.GREEN,
+            "result": {"alerts": alerts},
+        }
+    return None
 
 
 def _format_event_time(event: dict[str, Any]) -> str:

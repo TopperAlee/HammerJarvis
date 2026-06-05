@@ -8,7 +8,12 @@ from app.tools.productivity.email_service import clean_email_snippet
 def format_daily_briefing(results: dict[str, Any]) -> str:
     engine = PriorityEngine()
     priorities = engine.build_daily_priorities(results)
-    lines = ["Tagesstatus", "", "Wichtig zuerst:"]
+    lines = ["Tagesstatus"]
+    alert_lines = _watcher_alert_lines(results.get("watcher_alerts", {}))
+    if alert_lines:
+        lines.append("")
+        lines.extend(alert_lines)
+    lines.extend(["", "Wichtig zuerst:"])
     if priorities:
         for index, item in enumerate(priorities[:5], start=1):
             lines.append(f"{index}. {_priority_sentence(item)}")
@@ -180,9 +185,24 @@ def _event_time(event: dict[str, Any]) -> str:
 
 
 def _priority_sentence(item: dict[str, Any]) -> str:
+    if item.get("type") == "ecoflow" and item.get("reason") == "EcoFlow-Batterie unter Schwellwert.":
+        source = item.get("source_result", {})
+        soc = source.get("soc_percent") if isinstance(source, dict) else None
+        if soc is not None:
+            return f"EcoFlow-Batterie ist niedrig: {int(round(float(soc)))} %. {item.get('recommended_action')}"
     if item.get("type") == "email":
         return f"{item.get('title', 'E-Mail')}. {item.get('recommended_action')}"
     return f"{item.get('title', 'Prioritaet')}. {item.get('recommended_action')}"
+
+
+def _watcher_alert_lines(result: dict[str, Any]) -> list[str]:
+    alerts = result.get("alerts", []) if isinstance(result, dict) else []
+    if not alerts:
+        return []
+    lines = ["Proaktive Hinweise:"]
+    for alert in alerts[:5]:
+        lines.append(f"- {alert.get('title')}: {alert.get('message')}")
+    return lines
 
 
 def _recommended_steps(priorities: list[dict[str, Any]], results: dict[str, Any]) -> list[str]:

@@ -17,6 +17,10 @@ const elements = {
   batteryPower: document.getElementById("batteryPower"),
   warningCounts: document.getElementById("warningCounts"),
   warnings: document.getElementById("warnings"),
+  watcherCounts: document.getElementById("watcherCounts"),
+  watcherAlerts: document.getElementById("watcherAlerts"),
+  runWatchers: document.getElementById("runWatchers"),
+  refreshWatchers: document.getElementById("refreshWatchers"),
   problemCounts: document.getElementById("problemCounts"),
   problems: document.getElementById("problems"),
   voiceCard: document.getElementById("voiceCard"),
@@ -111,6 +115,18 @@ function renderProblem(entity) {
   code.textContent = entity.entity_id || "unknown";
   wrapper.appendChild(code);
   wrapper.append(` ${entity.state || ""}`);
+  return wrapper;
+}
+
+function renderWatcherAlert(alert) {
+  const wrapper = document.createElement("span");
+  wrapper.textContent = `${alert.severity || "info"}: ${alert.title || "Hinweis"} - ${alert.message || ""}`;
+  if (alert.recommended_action) {
+    const action = document.createElement("div");
+    action.className = "muted";
+    action.textContent = alert.recommended_action;
+    wrapper.appendChild(action);
+  }
   return wrapper;
 }
 
@@ -247,7 +263,7 @@ function startVoiceRecognition() {
   recognition.start();
 }
 
-function updateDashboard(energy, problems) {
+function updateDashboard(energy, problems, watcherData) {
   const humanStatus = energy.human_status || {};
   elements.errorPanel.hidden = true;
   setStatus(humanStatus.overall);
@@ -271,6 +287,10 @@ function updateDashboard(energy, problems) {
     `Kritisch: ${criticalCount} | Warnung: ${warningSeverityCount} | Info: ${infoCount}`;
   renderList(elements.warnings, energy.warnings || [], renderWarning);
 
+  const alerts = watcherData.alerts || [];
+  elements.watcherCounts.textContent = `Aktive Hinweise: ${alerts.length}`;
+  renderList(elements.watcherAlerts, alerts, renderWatcherAlert);
+
   const problemCritical = problems.critical_count ?? 0;
   const problemWarning = problems.warning_count ?? 0;
   const problemInfo = problems.informational_count ?? 0;
@@ -286,11 +306,12 @@ function updateDashboard(energy, problems) {
 
 async function refresh() {
   try {
-    const [energy, problems] = await Promise.all([
+    const [energy, problems, watcherData] = await Promise.all([
       fetchJson("/ha/ecoflow/energy"),
       fetchJson("/ha/problems"),
+      fetchJson("/assistant/watchers/alerts"),
     ]);
-    updateDashboard(energy, problems);
+    updateDashboard(energy, problems, watcherData);
   } catch (error) {
     elements.errorPanel.hidden = false;
     setStatus("critical");
@@ -339,6 +360,15 @@ function initializeVoiceControls() {
       sendChatMessage(command);
     });
   }
+  elements.refreshWatchers.addEventListener("click", refresh);
+  elements.runWatchers.addEventListener("click", async () => {
+    try {
+      await postJson("/assistant/watchers/run", {});
+      await refresh();
+    } catch (error) {
+      elements.errorPanel.hidden = false;
+    }
+  });
 }
 
 initializeVoiceControls();
