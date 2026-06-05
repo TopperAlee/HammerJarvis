@@ -251,9 +251,26 @@ class ToolRegistry:
     def _assistant_capabilities(self) -> dict[str, Any]:
         return {
             "message": (
-                "Hammer Jarvis kann EcoFlow und Home Assistant lesen, Gmail "
-                "read-only durchsuchen, TimeTree per lokaler ICS-Datei lesen "
-                "und vorbereitete Kalender-/E-Mail-Werkzeuge sicher verwalten. "
-                "E-Mail-Senden, PLC-Schreiben und Datei-Loeschen sind blockiert."
-            )
+                "Hammer Jarvis kann Daily Briefing, Hauscheck, Energiecheck, "
+                "Inbox Briefing und TimeTree Briefing ausfuehren. Er kann "
+                "EcoFlow-Diagnosen erstellen, Home Assistant read-only lesen, "
+                "Gmail read-only durchsuchen, TimeTree per lokaler ICS-Datei "
+                "lesen, Sprachbefehle ueber das Dashboard verarbeiten und das "
+                "lokale Ollama LLM nutzen. E-Mail-Senden, PLC-Schreiben und "
+                "Datei-Loeschen sind blockiert."
+            ),
+            "missions": [
+                "daily_briefing",
+                "home_check",
+                "energy_check",
+                "inbox_briefing",
+                "family_calendar_briefing",
+            ],
+            "capabilities": [
+                "Voice dashboard",
+                "Gmail read-only",
+                "Home Assistant read-only",
+                "EcoFlow diagnostics",
+                "Local Ollama LLM",
+            ],
         }

@@ -1,0 +1,66 @@
+{
+  "sender_rules": [
+    {
+      "match": "github.com",
+      "priority": "high",
+      "category": "security",
+      "reason": "GitHub-Sicherheits- und Kontoereignisse sind wichtig."
+    },
+    {
+      "match": "noreply@fernakademie-klett.de",
+      "priority": "high",
+      "category": "academy",
+      "reason": "Fernakademie-Nachrichten sind fuer den Nutzer wichtig."
+    },
+    {
+      "match": "lotto24",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "Lotto- und Jackpot-Werbung ist nicht wichtig."
+    },
+    {
+      "match": "dreame",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "Produktwerbung ist nicht wichtig."
+    },
+    {
+      "match": "campact",
+      "priority": "low",
+      "category": "newsletter",
+      "reason": "Politische Kampagnen/Newsletter sind nur Info."
+    },
+    {
+      "match": "linkedin",
+      "priority": "medium",
+      "category": "job",
+      "reason": "LinkedIn-Jobs sind potenziell relevant, aber nicht kritisch."
+    }
+  ],
+  "subject_rules": [
+    {
+      "match": "OAuth application",
+      "priority": "high",
+      "category": "security",
+      "reason": "OAuth-App-Autorisierung sollte geprueft werden."
+    },
+    {
+      "match": "Neue Nachricht auf der Online-Plattform",
+      "priority": "high",
+      "category": "academy",
+      "reason": "Neue Lernplattform-Nachricht."
+    },
+    {
+      "match": "Jackpot",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "Jackpot-Werbung."
+    },
+    {
+      "match": "Jetzt erhaeltlich",
+      "priority": "low",
+      "category": "marketing",
+      "reason": "Produktwerbung."
+    }
+  ]
+}

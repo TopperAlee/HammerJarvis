@@ -3,7 +3,7 @@ from typing import Any
 
 import requests
 
-from app.config.entity_overrides import is_ignored_entity
+from app.config.entity_overrides import get_ignore_reason, is_ignored_entity
 from app.config.settings import get_settings
 
 
@@ -88,6 +88,16 @@ class HomeAssistantTool:
             "informational": [],
         }
         for item in self.get_unavailable_entities():
+            entity_id = str(item.get("entity_id", ""))
+            if is_ignored_entity(entity_id):
+                ignored_item = {
+                    **item,
+                    "ignored": True,
+                    "message": f"Bekannte optionale Entity ignoriert: {entity_id}",
+                    "ignore_reason": get_ignore_reason(entity_id),
+                }
+                problems["informational"].append(ignored_item)
+                continue
             severity = self._classify_problem_entity(item)
             if severity:
                 problems[severity].append(item)

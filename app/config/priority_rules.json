@@ -1,0 +1,33 @@
+{
+  "email_high_keywords": [
+    "security",
+    "sicherheit",
+    "oauth",
+    "login",
+    "rechnung",
+    "frist",
+    "deadline",
+    "fernakademie",
+    "online-plattform"
+  ],
+  "email_medium_keywords": [
+    "job",
+    "stellenangebot",
+    "linkedin",
+    "termin",
+    "reminder"
+  ],
+  "email_low_senders": [
+    "linkedin",
+    "campact",
+    "eventim",
+    "newsletter"
+  ],
+  "email_suspicious_keywords": [
+    "hot-stock",
+    "500%",
+    "neu-kauf",
+    "schnell sein",
+    "depotwert"
+  ]
+}

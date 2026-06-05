@@ -12,7 +12,16 @@ from app.agent.core import HammerJarvisCore
 from app.agent.permissions import classify_action
 from app.assistant.orchestrator import AssistantOrchestrator
 from app.assistant.llm_client import LLMClient, sanitize_identity_response
+from app.assistant.missions import MissionController, get_mission_definitions
+from app.assistant.priority_engine import PriorityEngine
 from app.assistant.system_prompt import SYSTEM_PROMPT
+from app.config.personal_priority_rules import (
+    add_sender_rule,
+    add_subject_rule,
+    load_personal_priority_rules,
+    remove_rule,
+)
+from app.config.priority_rules import load_priority_rules
 from app.logging_utils.audit import write_audit_log
 from app.tools.home_assistant import HomeAssistantTool
 from app.tools.productivity.calendar_service import CalendarService
@@ -37,6 +46,27 @@ class AssistantChatRequest(BaseModel):
 
 class LLMTestRequest(BaseModel):
     message: str = Field(min_length=1)
+
+
+class MissionRunRequest(BaseModel):
+    mission: str = Field(min_length=1)
+
+
+class EmailScoreRequest(BaseModel):
+    sender: str = ""
+    subject: str = ""
+    snippet: str = ""
+
+
+class PersonalPriorityRuleRequest(BaseModel):
+    match: str = Field(min_length=1)
+    priority: str = Field(min_length=1)
+    category: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class PersonalPriorityRemoveRequest(BaseModel):
+    match: str = Field(min_length=1)
 
 
 class EntityActionRequest(BaseModel):
@@ -76,6 +106,49 @@ def assistant_chat(request: AssistantChatRequest) -> dict[str, Any]:
         )
     except Exception as exc:
         raise _to_http_exception(exc) from exc
+
+
+@app.get("/assistant/missions")
+def assistant_missions() -> dict[str, Any]:
+    return get_mission_definitions()
+
+
+@app.post("/assistant/mission/run")
+def assistant_mission_run(request: MissionRunRequest) -> dict[str, Any]:
+    try:
+        return MissionController().run_mission(request.mission)
+    except Exception as exc:
+        raise _to_http_exception(exc) from exc
+
+
+@app.get("/assistant/priority/rules")
+def assistant_priority_rules() -> dict[str, Any]:
+    return load_priority_rules()
+
+
+@app.get("/assistant/priority/personal-rules")
+def assistant_personal_priority_rules() -> dict[str, Any]:
+    return load_personal_priority_rules()
+
+
+@app.post("/assistant/priority/personal-rules/sender")
+def assistant_add_personal_sender_rule(request: PersonalPriorityRuleRequest) -> dict[str, Any]:
+    return add_sender_rule(request.match, request.priority, request.category, request.reason)
+
+
+@app.post("/assistant/priority/personal-rules/subject")
+def assistant_add_personal_subject_rule(request: PersonalPriorityRuleRequest) -> dict[str, Any]:
+    return add_subject_rule(request.match, request.priority, request.category, request.reason)
+
+
+@app.delete("/assistant/priority/personal-rules")
+def assistant_remove_personal_rule(request: PersonalPriorityRemoveRequest) -> dict[str, Any]:
+    return remove_rule(request.match)
+
+
+@app.post("/assistant/priority/email-score")
+def assistant_priority_email_score(request: EmailScoreRequest) -> dict[str, Any]:
+    return PriorityEngine().classify_email(request.model_dump())
 
 
 @app.get("/assistant/llm/status")

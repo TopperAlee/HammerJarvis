@@ -7,8 +7,10 @@ from app.agent.core import normalize_message
 from app.agent.permissions import ActionRisk
 from app.assistant.formatters.ecoflow_formatter import format_ecoflow_energy_answer
 from app.assistant.llm_client import LLMClient, sanitize_identity_response
+from app.assistant.missions import MissionController
 from app.assistant.system_prompt import SYSTEM_PROMPT
 from app.assistant.tool_registry import ToolRegistry
+from app.config.personal_priority_rules import add_sender_rule
 from app.logging_utils.audit import write_audit_log
 from app.tools.productivity.email_service import clean_email_snippet
 
@@ -26,6 +28,19 @@ class AssistantOrchestrator:
         normalized = normalize_message(message)
         if _is_email_send_intent(normalized) or _is_email_create_intent(normalized):
             return self._handle_rule_based(message, normalized, confirm)
+        priority_feedback = _handle_priority_feedback(message)
+        if priority_feedback:
+            return priority_feedback
+        mission_controller = MissionController(registry=self.registry)
+        mission_name = mission_controller.detect_mission(message)
+        if mission_name:
+            mission_result = mission_controller.run_mission(mission_name, message)
+            return {
+                "mode": "mission",
+                "tool": mission_name,
+                "risk": ActionRisk.GREEN,
+                **mission_result,
+            }
         known_route = _known_tool_route(message, normalized)
         if known_route:
             tool_name, arguments = known_route
@@ -478,6 +493,76 @@ def _contains_realtime_denial(answer: str) -> bool:
     )
 
 
+def _handle_priority_feedback(message: str) -> dict[str, Any] | None:
+    command = _strip_wake_prefix(message).strip(" .!?,:")
+    normalized = command.lower()
+
+    rule: tuple[str, str, str, str] | None = None
+    if "lotto24" in normalized and ("unwichtig" in normalized or "werbung" in normalized):
+        rule = ("lotto24", "low", "marketing", "Lotto- und Jackpot-Werbung ist nicht wichtig.")
+    elif "dreame" in normalized and ("werbung" in normalized or "unwichtig" in normalized):
+        rule = ("dreame", "low", "marketing", "Produktwerbung ist nicht wichtig.")
+    elif "linkedin" in normalized and ("mittel" in normalized or "medium" in normalized):
+        rule = ("linkedin", "medium", "job", "LinkedIn-Jobs sind potenziell relevant, aber nicht kritisch.")
+    elif "fernakademie" in normalized and "wichtig" in normalized:
+        rule = ("fernakademie", "high", "academy", "Fernakademie-Nachrichten sind fuer den Nutzer wichtig.")
+    elif "github" in normalized and "wichtig" in normalized:
+        rule = ("github", "high", "security", "GitHub-Sicherheits- und Kontoereignisse sind wichtig.")
+    else:
+        sender_match = re.search(r"absender\s+(.+?)\s+unwichtig", command, re.I)
+        if sender_match:
+            sender = sender_match.group(1).strip(" .!?,:")
+            rule = (sender, "low", "marketing", f"{sender} wurde als unwichtig markiert.")
+        high_match = re.search(r"priorisiere\s+absender\s+(.+?)\s+hoch", command, re.I)
+        if high_match:
+            sender = high_match.group(1).strip(" .!?,:")
+            rule = (sender, "high", "unknown", f"{sender} wurde als hohe Prioritaet markiert.")
+
+    if not rule:
+        return None
+
+    match, priority, category, reason = rule
+    display_match = {"lotto24": "LOTTO24", "dreame": "Dreame", "linkedin": "LinkedIn", "github": "GitHub"}.get(
+        match,
+        match,
+    )
+    add_sender_rule(match, priority, category, reason)
+    write_audit_log(
+        "assistant_priority_feedback",
+        {"match": match, "priority": priority, "category": category},
+    )
+    return {
+        "mode": "rule_based",
+        "tool": "priority_feedback",
+        "answer": f"Ich habe {display_match} als {_priority_label(priority)} / {category} gespeichert.",
+        "risk": ActionRisk.GREEN,
+        "result": {
+            "match": match.lower(),
+            "priority": priority,
+            "category": category,
+            "reason": reason,
+        },
+    }
+
+
+def _strip_wake_prefix(message: str) -> str:
+    return re.sub(
+        r"^\s*(?:hey\s+|okay\s+|ok\s+|hallo\s+|hammer\s+)?jarvis[\s,:-]*",
+        "",
+        message,
+        flags=re.I,
+    )
+
+
+def _priority_label(priority: str) -> str:
+    return {
+        "critical": "kritische Prioritaet",
+        "high": "hohe Prioritaet",
+        "medium": "mittlere Prioritaet",
+        "low": "niedrige Prioritaet",
+        "info": "Info-Prioritaet",
+    }.get(priority, priority)
+
+
 def _format_event_time(event: dict[str, Any]) -> str:
     return event["start"][11:16] if "T" in event.get("start", "") else "Ganztägig"
-

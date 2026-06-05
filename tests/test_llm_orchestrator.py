@@ -158,7 +158,7 @@ def test_llm_can_execute_multiple_green_tools(monkeypatch) -> None:
         )
 
     result = AssistantOrchestrator(registry=registry, llm_client=FakeLLMClient()).handle_message(
-        "Gibt es heute etwas Wichtiges?"
+        "Erstelle eine allgemeine Zusammenfassung."
     )
 
     assert result["mode"] == "llm"
@@ -410,7 +410,7 @@ def test_new_email_question_executes_gmail_unread_recent(monkeypatch) -> None:
     )
 
     assert executed == ["gmail"]
-    assert result["executed_tool"] == "gmail_unread_recent"
+    assert result["mission"] == "inbox_briefing"
     assert "Ich habe 2 Gmail-Nachrichten gefunden." in result["answer"]
 
 
@@ -435,7 +435,7 @@ def test_timetree_question_executes_timetree_today(monkeypatch) -> None:
     )
 
     assert executed == ["timetree"]
-    assert result["tool"] == "timetree_today"
+    assert result["tool"] == "family_calendar_briefing"
     assert "Heute stehen 1 TimeTree-Termine an" in result["answer"]
 
 
@@ -460,7 +460,7 @@ def test_home_assistant_offline_executes_problem_tool(monkeypatch) -> None:
     )
 
     assert executed == ["ha"]
-    assert result["tool"] == "home_assistant_get_problems"
+    assert result["tool"] == "home_check"
     assert "Kritisch: 1, Warnungen: 1, Infos: 0" in result["answer"]
 
 

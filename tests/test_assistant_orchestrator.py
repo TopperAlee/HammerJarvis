@@ -87,7 +87,8 @@ def test_assistant_email_search_routes_for_new_emails() -> None:
     )
 
     assert response.status_code == 200
-    assert response.json()["tool"] == "email_search_all"
+    assert response.json()["tool"] == "inbox_briefing"
+    assert response.json()["mission"] == "inbox_briefing"
 
 
 def test_assistant_email_create_draft_requires_confirmation() -> None:
@@ -270,7 +271,7 @@ def test_assistant_chat_returns_german_answer_when_gmail_fails(monkeypatch) -> N
     )
 
     assert response.status_code == 200
-    assert response.json()["tool"] == "email_search_all"
+    assert response.json()["tool"] == "inbox_briefing"
     assert "Gmail ist noch nicht korrekt verbunden" in response.json()["answer"]
     assert "v0.1" not in response.json()["answer"]
 
@@ -592,7 +593,8 @@ END:VEVENT
     response = client.post("/assistant/chat", json={"message": "TimeTree heute"})
 
     assert response.status_code == 200
-    assert response.json()["tool"] == "timetree_today"
+    assert response.json()["tool"] == "family_calendar_briefing"
+    assert response.json()["mission"] == "family_calendar_briefing"
     assert "Heute stehen 1 TimeTree-Termine an" in response.json()["answer"]
     assert "Voice Termin" in response.json()["answer"]
 
@@ -634,7 +636,7 @@ def test_assistant_timetree_intent_routes_to_status() -> None:
     response = client.post("/assistant/chat", json={"message": "Was ist mit TimeTree?"})
 
     assert response.status_code == 200
-    assert response.json()["tool"] == "timetree_today"
+    assert response.json()["tool"] == "family_calendar_briefing"
 
 
 def _ics(body: str) -> str:

@@ -283,6 +283,39 @@ Beispiel:
 Ignorierte EcoFlow-Entities erzeugen nur eine Info-Warnung und machen den Gesamtstatus nicht kritisch.
 In diese Datei gehoeren keine Secrets.
 
+## Persoenliche Prioritaetsregeln
+
+Hammer Jarvis kann lokale Prioritaetsregeln fuer die Daily Briefings speichern.
+Die Regeln liegen nur lokal in:
+
+```text
+app/config/personal_priority_rules.json
+```
+
+Es gibt Sender-Regeln und Betreff-Regeln. Sie beeinflussen nur die Jarvis-Analyse, nicht Gmail selbst.
+Jarvis sendet, loescht oder veraendert dadurch keine E-Mails und fuehrt kein Auto-Unsubscribe aus.
+
+Beispiele fuer Feedback-Kommandos:
+
+```text
+Jarvis, LOTTO24 ist unwichtig.
+Jarvis, Dreame ist Werbung.
+Jarvis, LinkedIn Jobs sind mittel wichtig.
+Jarvis, Fernakademie ist wichtig.
+Jarvis, GitHub Sicherheitsmails sind wichtig.
+Jarvis, merke dir, dass Absender Beispiel unwichtig ist.
+Jarvis, priorisiere Absender Beispiel hoch.
+```
+
+Die Regeln sind lokal abrufbar und bearbeitbar:
+
+```text
+GET http://127.0.0.1:8001/assistant/priority/personal-rules
+POST http://127.0.0.1:8001/assistant/priority/personal-rules/sender
+POST http://127.0.0.1:8001/assistant/priority/personal-rules/subject
+DELETE http://127.0.0.1:8001/assistant/priority/personal-rules
+```
+
 ## Tests
 
 ```powershell
