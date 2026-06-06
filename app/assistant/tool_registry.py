@@ -2,8 +2,11 @@ from typing import Any
 
 from app.agent.permissions import ActionRisk
 from app.assistant.schemas import RegisteredTool
+from app.assistant.session_state import open_best_match, open_result_by_index
 from app.logging_utils.audit import write_audit_log
+from app.tools.files.content_search_tool import ContentSearchTool
 from app.tools.files.file_creator import FileCreatorTool
+from app.tools.files.file_inspect_tool import FileInspectTool
 from app.tools.files.file_open_tool import FileOpenTool
 from app.tools.files.file_search_tool import FileSearchTool
 from app.tools.home_assistant import HomeAssistantTool
@@ -128,6 +131,8 @@ class ToolRegistry:
         gmail_provider = GmailProvider()
         file_creator = FileCreatorTool()
         file_search = FileSearchTool()
+        content_search = ContentSearchTool()
+        file_inspect = FileInspectTool()
         file_open = FileOpenTool()
         web_research = WebResearchTool()
 
@@ -305,6 +310,54 @@ class ToolRegistry:
             ActionRisk.GREEN,
             file_open.open_latest_export,
             {},
+            False,
+        )
+        self.register(
+            "file_content_search",
+            "Durchsucht Inhalte lokaler Dateien in erlaubten Verzeichnissen.",
+            ActionRisk.GREEN,
+            content_search.search_file_contents,
+            {"query": "string", "extensions": "list", "limit": "integer"},
+            False,
+        )
+        self.register(
+            "file_inspect",
+            "Liest eine erlaubte lokale Datei fuer Inhaltsinspektion.",
+            ActionRisk.GREEN,
+            file_inspect.inspect_file,
+            {"path": "string", "query": "string"},
+            False,
+        )
+        self.register(
+            "file_summarize",
+            "Fasst eine erlaubte lokale Datei zusammen.",
+            ActionRisk.GREEN,
+            file_inspect.summarize_file,
+            {"path": "string", "focus": "string"},
+            False,
+        )
+        self.register(
+            "file_extract_key_fields",
+            "Extrahiert Eckdaten aus einer erlaubten lokalen Datei.",
+            ActionRisk.GREEN,
+            file_inspect.extract_key_fields,
+            {"path": "string", "document_type": "string"},
+            False,
+        )
+        self.register(
+            "file_open_best_match",
+            "Oeffnet den besten Treffer der letzten Dateisuche.",
+            ActionRisk.GREEN,
+            open_best_match,
+            {},
+            False,
+        )
+        self.register(
+            "file_open_result_by_index",
+            "Oeffnet einen Treffer der letzten Dateisuche nach Index.",
+            ActionRisk.GREEN,
+            open_result_by_index,
+            {"index": "integer"},
             False,
         )
         self.register(

@@ -37,12 +37,18 @@ class AssistantOrchestrator:
         watcher_response = _handle_watcher_command(normalized)
         if watcher_response:
             return watcher_response
-        file_response = self._handle_file_command(normalized)
-        if file_response:
-            return file_response
         web_response = self._handle_web_research_command(message, normalized)
         if web_response:
             return web_response
+        file_action_response = self._handle_file_result_action(normalized)
+        if file_action_response:
+            return file_action_response
+        content_response = self._handle_file_content_command(normalized)
+        if content_response:
+            return content_response
+        file_response = self._handle_file_command(normalized)
+        if file_response:
+            return file_response
         mission_controller = MissionController(registry=self.registry)
         mission_name = mission_controller.detect_mission(message)
         if mission_name:
@@ -312,8 +318,8 @@ class AssistantOrchestrator:
             }
 
         if _is_file_open_intent(normalized):
-            query, extension = _file_query_and_extension(normalized)
-            result = self.registry.run("file_search", query=query, extensions=[extension] if extension else None, limit=5)
+            query, extensions = _file_query_and_extension(normalized)
+            result = self.registry.run("file_search", query=query, extensions=extensions, limit=5)
             files = result.get("files", [])
             if len(files) == 1:
                 opened = self.registry.run("file_open", path=str(files[0]["path"]))
@@ -335,8 +341,8 @@ class AssistantOrchestrator:
             }
 
         if _is_file_search_intent(normalized):
-            query, extension = _file_query_and_extension(normalized)
-            result = self.registry.run("file_search", query=query, extensions=[extension] if extension else None)
+            query, extensions = _file_query_and_extension(normalized)
+            result = self.registry.run("file_search", query=query, extensions=extensions)
             return {
                 "mode": "rule_based",
                 "tool": "file_search",
@@ -386,6 +392,83 @@ class AssistantOrchestrator:
             "result": result,
         }
 
+    def _handle_file_content_command(self, normalized: str) -> dict[str, Any] | None:
+        if not _is_file_content_search_intent(normalized):
+            return None
+        query, extensions = _content_query_and_extensions(normalized)
+        result = self.registry.run("file_content_search", query=query, extensions=extensions)
+        return {
+            "mode": "rule_based",
+            "tool": "file_content_search",
+            "executed_tool": "file_content_search",
+            "answer": _format_file_content_answer(result),
+            "risk": ActionRisk.GREEN,
+            "result": result,
+        }
+
+    def _handle_file_result_action(self, normalized: str) -> dict[str, Any] | None:
+        if _is_open_best_match_intent(normalized):
+            index = _result_index(normalized)
+            if index is None:
+                result = self.registry.run("file_open_best_match")
+                tool_name = "file_open_best_match"
+            else:
+                result = self.registry.run("file_open_result_by_index", index=index)
+                tool_name = "file_open_result_by_index"
+            return {
+                "mode": "rule_based",
+                "tool": tool_name,
+                "executed_tool": tool_name,
+                "answer": str(result.get("message", "Datei wurde geoeffnet.")),
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+        if _is_summarize_file_result_intent(normalized):
+            from app.assistant.session_state import session_state
+
+            best = session_state.get_best_file_result()
+            if not best:
+                return {
+                    "mode": "rule_based",
+                    "tool": "file_summarize",
+                    "answer": "Bitte suche zuerst nach Dateien.",
+                    "risk": ActionRisk.GREEN,
+                    "result": {"error": True},
+                }
+            focus = "Kaufvertrag" if "kaufvertrag" in normalized else None
+            result = self.registry.run("file_summarize", path=str(best.get("path", "")), focus=focus)
+            return {
+                "mode": "rule_based",
+                "tool": "file_summarize",
+                "executed_tool": "file_summarize",
+                "answer": str(result.get("summary", "Keine Zusammenfassung verfuegbar.")),
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+        if _is_extract_key_fields_intent(normalized):
+            from app.assistant.session_state import session_state
+
+            best = session_state.get_best_file_result()
+            if not best:
+                return {
+                    "mode": "rule_based",
+                    "tool": "file_extract_key_fields",
+                    "answer": "Bitte suche zuerst nach Dateien.",
+                    "risk": ActionRisk.GREEN,
+                    "result": {"error": True},
+                }
+            document_type = "kaufvertrag" if "kaufvertrag" in normalized else None
+            result = self.registry.run("file_extract_key_fields", path=str(best.get("path", "")), document_type=document_type)
+            return {
+                "mode": "rule_based",
+                "tool": "file_extract_key_fields",
+                "executed_tool": "file_extract_key_fields",
+                "answer": _format_key_fields_answer(result),
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+        return None
+
 
 def _is_ecoflow_intent(message: str) -> bool:
     return any(
@@ -431,9 +514,21 @@ def _is_file_create_intent(message: str) -> bool:
 
 
 def _is_file_search_intent(message: str) -> bool:
+    if any(term in message for term in ("erstelle", "mach mir", "exportiere", "vorlage erstellen", "datei erstellen")):
+        return False
     return any(
         term in message
         for term in (
+            "pdf",
+            "pdfs",
+            "datei",
+            "dateien",
+            "dokument",
+            "dokumente",
+            "excel",
+            "xlsx",
+            "word",
+            "docx",
             "onedrive",
             "one drive",
             "datei suchen",
@@ -447,9 +542,78 @@ def _is_file_search_intent(message: str) -> bool:
             "suche nach",
             "suche in onedrive",
             "suche in one drive",
+            "finde in onedrive",
+            "finde alle pdf",
+            "suche alle pdf",
+            "suche nach datei",
             "finde die datei mit",
+            "hauskauf",
+            "mietvertrag",
         )
     )
+
+
+def _is_file_content_search_intent(message: str) -> bool:
+    return any(
+        term in message
+        for term in (
+            "suche im inhalt",
+            "durchsuche pdfs nach",
+            "finde dateien in denen",
+            "suche kaufvertrag in pdfs",
+            "welche datei enthaelt",
+            "welche datei enthält",
+            "welche pdf enthaelt",
+            "welche pdf enthält",
+            "suche in dokumenten nach",
+            "suche in pdfs nach",
+        )
+    )
+
+
+def _is_open_best_match_intent(message: str) -> bool:
+    return any(
+        term in message
+        for term in (
+            "oeffne den besten treffer",
+            "öffne den besten treffer",
+            "oeffne die erste datei",
+            "öffne die erste datei",
+            "oeffne treffer",
+            "öffne treffer",
+        )
+    )
+
+
+def _is_summarize_file_result_intent(message: str) -> bool:
+    return any(
+        term in message
+        for term in (
+            "fasse den besten treffer zusammen",
+            "fasse den kaufvertrag zusammen",
+            "was steht in der datei",
+            "analysiere diese pdf",
+            "erstelle eine zusammenfassung der datei",
+        )
+    )
+
+
+def _is_extract_key_fields_intent(message: str) -> bool:
+    return any(
+        term in message
+        for term in (
+            "extrahiere die wichtigsten daten",
+            "eckdaten extrahieren",
+            "wichtigsten daten aus dem kaufvertrag",
+        )
+    )
+
+
+def _result_index(message: str) -> int | None:
+    if "erste datei" in message:
+        return 1
+    match = re.search(r"treffer\s+(\d+)", message)
+    return int(match.group(1)) if match else None
 
 
 def _is_onedrive_file_intent(message: str) -> bool:
@@ -490,12 +654,14 @@ def _is_file_open_intent(message: str) -> bool:
     )
 
 
-def _file_query_and_extension(message: str) -> tuple[str, str | None]:
+def _file_query_and_extension(message: str) -> tuple[str, list[str] | None]:
     extension: str | None = None
-    if "excel" in message or "xlsx" in message:
-        extension = ".xlsx"
-    elif "pdf" in message:
+    if "pdf" in message:
         extension = ".pdf"
+    elif "excel" in message or "xlsx" in message:
+        extension = ".xlsx"
+    elif "word" in message or "docx" in message:
+        extension = ".docx"
     elif "csv" in message:
         extension = ".csv"
 
@@ -505,10 +671,21 @@ def _file_query_and_extension(message: str) -> tuple[str, str | None]:
         "suche in one drive nach",
         "suche in onedrive",
         "suche in one drive",
+        "finde in onedrive nach",
+        "finde in onedrive",
+        "suche alle pdfs zum",
+        "suche alle pdfs",
+        "suche alle pdf zum",
+        "suche alle pdf",
+        "finde alle pdfs zum",
+        "finde alle pdfs",
+        "finde alle pdf zum",
+        "finde alle pdf",
         "finde die datei mit",
         "finde datei",
         "datei suchen",
         "suche datei",
+        "suche nach datei",
         "suche nach",
         "wo ist",
         "finde excel mit",
@@ -527,23 +704,114 @@ def _file_query_and_extension(message: str) -> tuple[str, str | None]:
         "mit",
         "onedrive",
         "one drive",
+        "zum",
+        "zur",
     ):
         query = query.replace(token, " ")
-    query = query.replace(".xlsx", " ").replace("excel", " ").replace("pdf", " ").replace("csv", " ")
+    query = (
+        query.replace(".xlsx", " ")
+        .replace(".xls", " ")
+        .replace(".pdf", " ")
+        .replace(".docx", " ")
+        .replace("excel", " ")
+        .replace("pdfs", " ")
+        .replace("pdf", " ")
+        .replace("word", " ")
+        .replace("docx", " ")
+        .replace("csv", " ")
+    )
     query = re.sub(r"[?.!,;:]", " ", query)
     query = re.sub(r"\s+", " ", query).strip()
-    return (query or message.strip(), extension)
+    extensions = _extensions_for_message(message, extension)
+    return ((query or message.strip()).title(), extensions)
+
+
+def _extensions_for_message(message: str, extension: str | None) -> list[str] | None:
+    if "excel" in message or "xlsx" in message:
+        return [".xlsx", ".xls"]
+    return [extension] if extension else None
 
 
 def _format_file_search_answer(result: dict[str, Any], ask_to_choose: bool = False) -> str:
     if not result.get("files"):
-        return "Ich habe in den erlaubten Ordnern keine passende Datei gefunden."
-    lines = [str(result.get("message", "0 Dateien gefunden."))]
-    for file in result.get("files", [])[:5]:
-        lines.append(f"- {file.get('name')}: {file.get('path')}")
+        label = _file_type_label(result.get("extensions", []))
+        return (
+            f"Ich habe in den erlaubten Ordnern gesucht, aber keine passende {label}gefunden. "
+            "Aktuell suche ich nur Dateiname und Pfad, nicht den Inhalt von PDFs."
+        )
+    label = _file_type_label(result.get("extensions", []), plural=True)
+    lines = [f"Ich habe {result.get('count', 0)} passende {label}gefunden:"]
+    for index, file in enumerate(result.get("files", [])[:10], start=1):
+        lines.append(f"{index}. {file.get('name')}")
+        lines.append(f"   {file.get('path')}")
+        if file.get("modified_at"):
+            lines.append(f"   {file.get('modified_at')}")
     if ask_to_choose and result.get("files"):
         lines.append("Welche Datei soll ich oeffnen?")
     return "\n".join(lines)
+
+
+def _content_query_and_extensions(message: str) -> tuple[str, list[str] | None]:
+    extensions: list[str] | None = None
+    if "pdf" in message:
+        extensions = [".pdf"]
+    elif "dokument" in message or "docx" in message or "word" in message:
+        extensions = [".docx", ".pdf", ".txt", ".md", ".csv", ".xlsx", ".xlsm", ".json"]
+    query = message
+    for token in (
+        "suche im inhalt nach",
+        "suche im inhalt",
+        "durchsuche pdfs nach",
+        "finde dateien in denen",
+        "suche kaufvertrag in pdfs",
+        "welche datei enthaelt",
+        "welche datei enthält",
+        "welche pdf enthaelt",
+        "welche pdf enthält",
+        "suche in dokumenten nach",
+        "suche in pdfs nach",
+        "steht",
+        "pdfs",
+        "pdf",
+    ):
+        query = query.replace(token, " ")
+    query = re.sub(r"[?.!,;:]", " ", query)
+    query = re.sub(r"\s+", " ", query).strip()
+    if "kaufvertrag in" in message:
+        query = "kaufvertrag"
+    return ((query or message).title(), extensions)
+
+
+def _format_file_content_answer(result: dict[str, Any]) -> str:
+    if not result.get("files"):
+        return "Ich habe in den erlaubten Ordnern gesucht, aber keine Inhaltstreffer gefunden."
+    lines = [f"Ich habe {result.get('count', 0)} Dateien mit Inhaltstreffern gefunden:"]
+    for index, file in enumerate(result.get("files", [])[:10], start=1):
+        lines.append(f"{index}. {file.get('name')}")
+        lines.append(f"   {file.get('path')}")
+        for snippet in file.get("snippets", [])[:2]:
+            lines.append(f"   Treffer: {snippet}")
+    return "\n".join(lines)
+
+
+def _format_key_fields_answer(result: dict[str, Any]) -> str:
+    snippets = result.get("key_snippets", {})
+    if not snippets:
+        return "Ich habe keine Eckdaten gefunden."
+    lines = ["Gefundene Eckdaten:"]
+    for key, values in snippets.items():
+        lines.append(f"- {key}: {values[0]}")
+    return "\n".join(lines)
+
+
+def _file_type_label(extensions: list[str], plural: bool = False) -> str:
+    if ".pdf" in extensions:
+        return "PDF-Dateien " if plural else "PDF-Datei "
+    if ".xlsx" in extensions or ".xls" in extensions:
+        return "Excel-Dateien " if plural else "Excel-Datei "
+    if ".docx" in extensions:
+        return "Word-Dateien " if plural else "Word-Datei "
+    return "Dateien " if plural else "Datei "
 
 
 def _is_web_research_intent(message: str) -> bool:

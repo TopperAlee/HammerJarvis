@@ -195,6 +195,11 @@ h3 {
   outline-offset: 2px;
 }
 
+.select-input {
+  min-width: 180px;
+  font-size: 15px;
+}
+
 .button-row,
 .quick-buttons {
   display: flex;

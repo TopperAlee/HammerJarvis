@@ -1,0 +1,81 @@
+<h2>Hammer Jarvis Dashboard Redesign</h2>
+<p class="subtitle">Proposed direction: cinematic local command center, preserving all existing backend features and voice controls.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Preview: Futuristic HUD Layout</div>
+  <div class="mockup-body">
+    <div style="background:#050a12;color:#d9fbff;border:1px solid #1bd6e840;border-radius:16px;padding:16px;box-shadow:0 0 40px #00d5ff22;font-family:Arial,sans-serif;">
+      <div style="display:grid;grid-template-columns:150px 1fr 260px;gap:14px;min-height:520px;">
+        <aside style="border:1px solid #1bd6e84d;background:#06131dcc;border-radius:14px;padding:12px;">
+          <div style="font-size:12px;color:#64f5ff;font-weight:700;letter-spacing:1px;margin-bottom:16px;">HAMMER JARVIS</div>
+          <div style="display:grid;gap:8px;font-size:11px;color:#a8dce2;">
+            <div style="border-left:2px solid #18e6ff;padding:7px;background:#0b2432;">Mission Control</div>
+            <div style="padding:7px;">Energie</div>
+            <div style="padding:7px;">Haus</div>
+            <div style="padding:7px;">Kommunikation</div>
+            <div style="padding:7px;">Kalender</div>
+            <div style="padding:7px;">Dateien</div>
+            <div style="padding:7px;">Recherche</div>
+            <div style="padding:7px;">Alerts</div>
+            <div style="padding:7px;">Chat</div>
+          </div>
+        </aside>
+
+        <main style="display:grid;grid-template-rows:auto 1fr auto;gap:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;border:1px solid #1bd6e840;background:#06131dcc;border-radius:14px;padding:10px 14px;">
+            <strong style="color:#eaffff;">HAMMER JARVIS</strong>
+            <span style="color:#45f5b7;font-size:11px;">LOKAL AKTIV | OLLAMA qwen3:8b | 22:41</span>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:14px;">
+            <section style="display:flex;align-items:center;justify-content:center;border:1px solid #1bd6e84d;background:radial-gradient(circle,#0d3144 0,#07111b 55%,#050a12 100%);border-radius:18px;min-height:300px;">
+              <div style="width:210px;height:210px;border:2px solid #19e5ff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 35px #00ddff66, inset 0 0 35px #00ddff22;position:relative;">
+                <div style="width:150px;height:150px;border:1px dashed #ffc56a99;border-radius:50%;display:flex;align-items:center;justify-content:center;text-align:center;">
+                  <div>
+                    <div style="font-size:20px;font-weight:800;color:#f5ffff;">HAMMER<br>JARVIS</div>
+                    <div style="font-size:10px;color:#46f6b6;margin-top:8px;">AKTIV & BEREIT</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div style="border:1px solid #1bd6e840;background:#071622cc;border-radius:14px;padding:12px;"><strong>EcoFlow</strong><br><span style="color:#ffc56a;">Warnung</span><br><small>Batterie 45 %, PV 0 W</small></div>
+              <div style="border:1px solid #45f5b740;background:#071622cc;border-radius:14px;padding:12px;"><strong>Home Assistant</strong><br><span style="color:#45f5b7;">OK</span><br><small>Keine kritischen Geräte</small></div>
+              <div style="border:1px solid #1bd6e840;background:#071622cc;border-radius:14px;padding:12px;"><strong>Gmail</strong><br><small>Neue Nachrichten</small></div>
+              <div style="border:1px solid #1bd6e840;background:#071622cc;border-radius:14px;padding:12px;"><strong>TimeTree</strong><br><small>Heute 2 Termine</small></div>
+            </section>
+          </div>
+
+          <section style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+            <div style="border:1px solid #1bd6e840;background:#06131dcc;border-radius:14px;padding:12px;">Dateien / OneDrive Suche</div>
+            <div style="border:1px solid #1bd6e840;background:#06131dcc;border-radius:14px;padding:12px;">Web Recherche mit Quellen</div>
+            <div style="border:1px solid #ffc56a66;background:#191104cc;border-radius:14px;padding:12px;">Proaktive Hinweise</div>
+          </section>
+        </main>
+
+        <aside style="display:grid;grid-template-rows:1fr 1.2fr;gap:14px;">
+          <section style="border:1px solid #1bd6e84d;background:#06131dcc;border-radius:14px;padding:12px;">
+            <strong>Mission Control</strong>
+            <ul style="font-size:11px;line-height:1.8;color:#a8dce2;padding-left:16px;">
+              <li>OpenAI Datenexport prüfen</li>
+              <li>Fernakademie Nachricht öffnen</li>
+              <li>EcoFlow Tageswerte prüfen</li>
+            </ul>
+          </section>
+          <section style="border:1px solid #1bd6e84d;background:#06131dcc;border-radius:14px;padding:12px;">
+            <strong>Chat</strong>
+            <div style="margin-top:10px;background:#0b2230;border-radius:12px;padding:10px;font-size:11px;">Jarvis, was macht EcoFlow gerade?</div>
+            <div style="margin-top:8px;background:#08251f;border-radius:12px;padding:10px;font-size:11px;">EcoFlow ist erreichbar. Batterie: 45 %. PV-Leistung: 0 W.</div>
+            <div style="margin-top:14px;display:flex;gap:6px;"><input class="mock-input" placeholder="Befehl..." style="flex:1;"><button class="mock-button">Senden</button></div>
+          </section>
+        </aside>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Implementation Plan After Approval</h3>
+  <p>Rewrite only the static dashboard layer: HTML structure, CSS HUD styling, and JavaScript bindings. Backend APIs stay unchanged.</p>
+</div>

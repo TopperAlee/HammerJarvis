@@ -50,3 +50,5 @@ uvicorn==0.48.0
 apscheduler
 openpyxl
 beautifulsoup4
+pypdf
+python-docx

@@ -132,7 +132,12 @@
               autocomplete="off"
               placeholder="Datei suchen..."
             >
+            <select id="fileSearchMode" class="command-input select-input">
+              <option value="path">Dateiname/Pfad</option>
+              <option value="content">Dateiinhalt</option>
+            </select>
             <button id="fileSearchButton" class="dashboard-button" type="button">Suchen</button>
+            <button id="fileContentSearchButton" class="dashboard-button" type="button">Inhalte durchsuchen</button>
             <button id="openLatestFile" class="dashboard-button" type="button">Letzte Datei oeffnen</button>
           </div>
           <p id="fileStatus" class="muted">Noch keine Datei erstellt.</p>

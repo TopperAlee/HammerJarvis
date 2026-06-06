@@ -259,3 +259,85 @@ def test_onedrive_search_never_returns_generic_unsupported_answer(monkeypatch, t
     assert "keine direkte Suche in OneDrive" not in result["answer"]
     assert "unterstuetze" not in result["answer"].lower()
     assert result["tool"] == "file_search"
+
+
+def test_pdf_house_purchase_search_routes_to_file_search(monkeypatch, tmp_path) -> None:
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    (export_dir / "Hauskauf Checkliste.pdf").write_text("pdf", encoding="utf-8")
+    monkeypatch.setenv("FILE_SEARCH_ALLOWED_DIRS", str(export_dir))
+
+    result = AssistantOrchestrator().handle_message("Jarvis, suche alle PDFs zum Hauskauf.")
+
+    assert result["tool"] == "file_search"
+    assert result["result"]["query"] == "Hauskauf"
+    assert result["result"]["extensions"] == [".pdf"]
+    assert result["result"]["count"] == 1
+
+
+def test_pdf_search_does_not_return_generic_filesystem_denial(monkeypatch, tmp_path) -> None:
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    monkeypatch.setenv("FILE_SEARCH_ALLOWED_DIRS", str(export_dir))
+
+    result = AssistantOrchestrator().handle_message("Jarvis, suche alle PDFs zum Hauskauf.")
+
+    assert result["tool"] == "file_search"
+    assert "keinen Zugriff auf die lokale Dateisystemstruktur" not in result["answer"]
+
+
+def test_search_response_includes_searched_dirs(monkeypatch, tmp_path) -> None:
+    from app.tools.files.file_search_tool import FileSearchTool
+
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    monkeypatch.setenv("FILE_SEARCH_ALLOWED_DIRS", str(export_dir))
+
+    result = FileSearchTool().search_files("Hauskauf", extensions=[".pdf"])
+
+    assert str(export_dir.resolve()) in result["searched_dirs"]
+    assert result["skipped_dirs"] == []
+
+
+def test_pdf_extension_filter_works(monkeypatch, tmp_path) -> None:
+    from app.tools.files.file_search_tool import FileSearchTool
+
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    (export_dir / "Hauskauf.pdf").write_text("pdf", encoding="utf-8")
+    (export_dir / "Hauskauf.txt").write_text("txt", encoding="utf-8")
+    monkeypatch.setenv("FILE_SEARCH_ALLOWED_DIRS", str(export_dir))
+
+    result = FileSearchTool().search_files("Hauskauf", extensions=[".pdf"])
+
+    assert result["count"] == 1
+    assert result["files"][0]["extension"] == ".pdf"
+
+
+def test_no_result_message_mentions_filename_path_only(monkeypatch, tmp_path) -> None:
+    from app.tools.files.file_search_tool import FileSearchTool
+
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    monkeypatch.setenv("FILE_SEARCH_ALLOWED_DIRS", str(export_dir))
+
+    result = FileSearchTool().search_files("Hauskauf", extensions=[".pdf"])
+
+    assert "Dateiname und Pfad" in result["message"]
+
+
+def test_file_status_returns_raw_resolved_existing_and_missing_dirs(monkeypatch, tmp_path) -> None:
+    existing = tmp_path / "existing"
+    missing = tmp_path / "missing"
+    existing.mkdir()
+    raw = f"{existing};{missing}"
+    monkeypatch.setenv("FILE_SEARCH_ALLOWED_DIRS", raw)
+
+    response = client.get("/assistant/files/status")
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["allowed_dirs_raw"] == raw
+    assert str(existing.resolve()) in payload["resolved_allowed_dirs"]
+    assert str(existing.resolve()) in payload["existing_allowed_dirs"]
+    assert str(missing.resolve()) in payload["missing_allowed_dirs"]

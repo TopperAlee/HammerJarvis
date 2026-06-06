@@ -23,7 +23,9 @@ const elements = {
   refreshWatchers: document.getElementById("refreshWatchers"),
   fileStatus: document.getElementById("fileStatus"),
   fileSearchInput: document.getElementById("fileSearchInput"),
+  fileSearchMode: document.getElementById("fileSearchMode"),
   fileSearchButton: document.getElementById("fileSearchButton"),
+  fileContentSearchButton: document.getElementById("fileContentSearchButton"),
   openLatestFile: document.getElementById("openLatestFile"),
   fileSearchResults: document.getElementById("fileSearchResults"),
   generatedFiles: document.getElementById("generatedFiles"),
@@ -173,6 +175,44 @@ function renderSearchResult(file) {
       }
     });
     wrapper.appendChild(openButton);
+    const summarizeButton = document.createElement("button");
+    summarizeButton.className = "dashboard-button inline-button";
+    summarizeButton.type = "button";
+    summarizeButton.textContent = "Zusammenfassen";
+    summarizeButton.addEventListener("click", async () => {
+      try {
+        const response = await postJson("/assistant/files/summarize", { path: file.path });
+        elements.fileStatus.textContent = response.summary || response.message || "Keine Zusammenfassung verfuegbar.";
+      } catch (error) {
+        elements.fileStatus.textContent = "Zusammenfassung fehlgeschlagen.";
+      }
+    });
+    wrapper.appendChild(summarizeButton);
+    const extractButton = document.createElement("button");
+    extractButton.className = "dashboard-button inline-button";
+    extractButton.type = "button";
+    extractButton.textContent = "Eckdaten extrahieren";
+    extractButton.addEventListener("click", async () => {
+      try {
+        const response = await postJson("/assistant/files/extract-key-fields", {
+          path: file.path,
+          document_type: "kaufvertrag",
+        });
+        const entries = Object.entries(response.key_snippets || {});
+        elements.fileStatus.textContent = entries.length
+          ? entries.map(([key, values]) => `${key}: ${values[0]}`).join(" | ")
+          : response.message || "Keine Eckdaten gefunden.";
+      } catch (error) {
+        elements.fileStatus.textContent = "Eckdaten konnten nicht extrahiert werden.";
+      }
+    });
+    wrapper.appendChild(extractButton);
+  }
+  if (file.snippets && file.snippets.length > 0) {
+    const snippet = document.createElement("div");
+    snippet.className = "muted";
+    snippet.textContent = file.snippets.slice(0, 2).join(" ... ");
+    wrapper.appendChild(snippet);
   }
   return wrapper;
 }
@@ -440,17 +480,11 @@ function initializeVoiceControls() {
     });
   }
   elements.fileSearchButton.addEventListener("click", async () => {
-    const query = elements.fileSearchInput.value.trim();
-    if (!query) {
-      return;
-    }
-    try {
-      const response = await fetchJson(`/assistant/files/search?q=${encodeURIComponent(query)}`);
-      elements.fileStatus.textContent = response.message || "Suche abgeschlossen.";
-      renderList(elements.fileSearchResults, response.files || [], renderSearchResult);
-    } catch (error) {
-      elements.fileStatus.textContent = "Dateisuche fehlgeschlagen.";
-    }
+    await runFileSearch();
+  });
+  elements.fileContentSearchButton.addEventListener("click", async () => {
+    elements.fileSearchMode.value = "content";
+    await runFileSearch();
   });
   elements.fileSearchInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -487,6 +521,23 @@ function initializeVoiceControls() {
       elements.webResearchButton.click();
     }
   });
+}
+
+async function runFileSearch() {
+    const query = elements.fileSearchInput.value.trim();
+    if (!query) {
+      return;
+    }
+    try {
+      const endpoint = elements.fileSearchMode.value === "content"
+        ? "/assistant/files/content-search"
+        : "/assistant/files/search";
+      const response = await fetchJson(`${endpoint}?q=${encodeURIComponent(query)}`);
+      elements.fileStatus.textContent = response.message || "Suche abgeschlossen.";
+      renderList(elements.fileSearchResults, response.files || [], renderSearchResult);
+    } catch (error) {
+      elements.fileStatus.textContent = "Dateisuche fehlgeschlagen.";
+    }
 }
 
 initializeVoiceControls();

@@ -381,6 +381,92 @@ Oeffne die letzte erstellte Datei.
 Oeffne ausgaben.xlsx.
 ```
 
+## Dateiinhalte durchsuchen
+
+Hammer Jarvis kann Inhalte lokaler Dateien in erlaubten Ordnern durchsuchen.
+Die Suche bleibt lokal und nutzt nur die in `FILE_SEARCH_ALLOWED_DIRS` konfigurierten Verzeichnisse.
+Es werden keine Inhalte hochgeladen, keine Dateien veraendert und keine Dateien geloescht.
+
+Unterstuetzte Formate:
+
+- PDF
+- DOCX
+- XLSX / XLSM
+- CSV
+- TXT
+- MD
+- JSON
+
+Grosse Dateien koennen uebersprungen werden. Standardlimit:
+
+```text
+FILE_CONTENT_MAX_FILE_SIZE_MB=25
+```
+
+Scans oder bildbasierte PDFs werden noch nicht per OCR gelesen.
+Fuer solche Dateien braucht Hammer Jarvis spaeter eine separate lokale OCR-Funktion.
+
+Lokale Endpunkte:
+
+```text
+GET http://127.0.0.1:8001/assistant/files/content-search?q=Kaufvertrag&extension=.pdf
+POST http://127.0.0.1:8001/assistant/files/inspect
+```
+
+Beispiele:
+
+```text
+Suche in PDFs nach Kaufvertrag.
+Welche PDF enthaelt Energieausweis?
+Suche in Dokumenten nach Rechnungsnummer 12345.
+```
+
+## Dateien inspizieren und zusammenfassen
+
+Hammer Jarvis kann gefundene lokale Dateien inspizieren, den besten Treffer oeffnen,
+Dokumente zusammenfassen und einfache Eckdaten extrahieren.
+Das funktioniert nur fuer Dateien innerhalb der erlaubten Ordner aus `FILE_SEARCH_ALLOWED_DIRS`.
+
+Die Zusammenfassung nutzt, wenn verfuegbar, das lokale Ollama-LLM.
+Dateiinhalte werden nicht an externe APIs hochgeladen.
+Wenn kein lokales LLM verfuegbar ist, zeigt Jarvis stattdessen extrahierte Textauszuege.
+Dateien werden nicht veraendert, nicht geloescht und nicht verschoben.
+
+Fuer Kaufvertraege sucht Jarvis deterministisch nach Begriffen wie:
+
+- Kaufpreis
+- Kaeufer / Verkaeufer
+- Objekt / Adresse
+- Grundbuch
+- Notar
+- UVZ
+- Faelligkeit / Fristen
+- Besitzuebergang
+- Auflassung
+- Grundschuld
+
+OCR fuer gescannte PDFs ist noch nicht enthalten.
+
+Lokale Endpunkte:
+
+```text
+GET http://127.0.0.1:8001/assistant/files/last-results
+POST http://127.0.0.1:8001/assistant/files/inspect
+POST http://127.0.0.1:8001/assistant/files/summarize
+POST http://127.0.0.1:8001/assistant/files/extract-key-fields
+POST http://127.0.0.1:8001/assistant/files/open-best-match
+POST http://127.0.0.1:8001/assistant/files/open-result
+```
+
+Beispiele:
+
+```text
+Oeffne den besten Treffer.
+Oeffne Treffer 1.
+Fasse den Kaufvertrag zusammen.
+Extrahiere die wichtigsten Daten aus dem Kaufvertrag.
+```
+
 ## Internetrecherche
 
 Hammer Jarvis kann Webrecherche ueber eine lokale SearXNG-Instanz ausfuehren.

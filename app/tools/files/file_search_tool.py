@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.tools.files.path_safety import get_allowed_search_dirs, get_export_dir
+from app.tools.files.path_safety import DEFAULT_FILE_SEARCH_ALLOWED_DIRS, get_allowed_search_dirs, get_export_dir
 
 
 SUPPORTED_EXTENSIONS = {
@@ -31,30 +31,43 @@ class FileSearchTool:
         cleaned_query = query.strip().lower()
         max_results = limit or int(os.getenv("FILE_SEARCH_MAX_RESULTS", "25"))
         allowed_extensions = _normalize_extensions(extensions)
-        matches: list[Path] = []
+        matches: list[dict[str, Any]] = []
+        searched_dirs: list[str] = []
+        skipped_dirs: list[str] = []
 
         if cleaned_query:
             for directory in get_allowed_search_dirs():
                 if not directory.exists() or not directory.is_dir():
+                    skipped_dirs.append(str(directory))
                     continue
+                searched_dirs.append(str(directory))
                 for path in _iter_supported_files(directory):
                     if len(matches) >= max_results:
                         break
                     if allowed_extensions and path.suffix.lower() not in allowed_extensions:
                         continue
-                    searchable = f"{path.name} {path}".lower()
-                    if cleaned_query in searchable:
-                        matches.append(path)
+                    file_match = _path_match_result(path, cleaned_query)
+                    if file_match:
+                        matches.append(file_match)
                 if len(matches) >= max_results:
                     break
 
-        files = [_file_result(path) for path in matches[:max_results]]
-        return {
+        matches.sort(key=lambda item: item["score"], reverse=True)
+        files = matches[:max_results]
+        normalized_extensions = sorted(allowed_extensions)
+        result = {
             "query": query,
+            "extensions": normalized_extensions,
+            "searched_dirs": searched_dirs,
+            "skipped_dirs": skipped_dirs,
             "count": len(files),
             "files": files,
-            "message": f"{len(files)} Dateien gefunden.",
+            "message": _search_message(files),
         }
+        from app.assistant.session_state import session_state
+
+        session_state.save_file_results(result)
+        return result
 
     def list_recent_exports(self, limit: int = 10) -> dict[str, Any]:
         export_dir = get_export_dir()
@@ -77,12 +90,19 @@ class FileSearchTool:
 
 
 def get_file_search_status() -> dict[str, Any]:
+    raw = os.getenv("FILE_SEARCH_ALLOWED_DIRS", DEFAULT_FILE_SEARCH_ALLOWED_DIRS)
     allowed_dirs = get_allowed_search_dirs()
+    existing_dirs = [path for path in allowed_dirs if path.exists() and path.is_dir()]
+    missing_dirs = [path for path in allowed_dirs if not path.exists() or not path.is_dir()]
     onedrive_env = os.getenv("OneDrive") or os.getenv("ONEDRIVE") or ""
     onedrive_path = Path(onedrive_env).resolve() if onedrive_env else None
     return {
         "enabled": os.getenv("FILE_SEARCH_ENABLED", "true").strip().lower() == "true",
+        "allowed_dirs_raw": raw,
         "allowed_dirs": [str(path) for path in allowed_dirs],
+        "resolved_allowed_dirs": [str(path) for path in allowed_dirs],
+        "existing_allowed_dirs": [str(path) for path in existing_dirs],
+        "missing_allowed_dirs": [str(path) for path in missing_dirs],
         "onedrive_env": str(onedrive_path) if onedrive_path else None,
         "onedrive_configured": _is_onedrive_configured(onedrive_path, allowed_dirs),
         "max_results": int(os.getenv("FILE_SEARCH_MAX_RESULTS", "25")),
@@ -102,6 +122,20 @@ def _normalize_extensions(extensions: list[str] | None) -> set[str]:
         if value in SUPPORTED_EXTENSIONS:
             normalized.add(value)
     return normalized
+
+
+def _search_message(files: list[dict[str, Any]]) -> str:
+    if not files:
+        return (
+            "Ich habe in den erlaubten Ordnern gesucht, aber keine passende Datei gefunden. "
+            "Aktuell suche ich nur in Dateiname und Pfad, nicht im Dateiinhalt."
+        )
+    if all(file.get("path_match_only") for file in files):
+        return (
+            "Ich habe viele Treffer gefunden, weil der Ordnerpfad den Suchbegriff enthält. "
+            "Für genauere Ergebnisse nutze die Inhaltssuche."
+        )
+    return f"{len(files)} Dateien gefunden."
 
 
 def _iter_supported_files(directory: Path) -> list[Path]:
@@ -125,6 +159,27 @@ def _file_result(path: Path) -> dict[str, Any]:
         "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
         "source": "workspace_exports" if _is_export_file(path) else "allowed_dir",
     }
+
+
+def _path_match_result(path: Path, cleaned_query: str) -> dict[str, Any] | None:
+    lowered_name = path.name.lower()
+    lowered_path = str(path).lower()
+    match_sources: list[str] = []
+    score = 0
+    if cleaned_query in lowered_name:
+        match_sources.append("filename")
+        score += 100
+    if cleaned_query in lowered_path:
+        match_sources.append("path")
+        if "filename" not in match_sources:
+            score += 10
+    if not match_sources:
+        return None
+    result = _file_result(path)
+    result["score"] = score
+    result["match_sources"] = match_sources
+    result["path_match_only"] = match_sources == ["path"]
+    return result
 
 
 def _is_export_file(path: Path) -> bool:

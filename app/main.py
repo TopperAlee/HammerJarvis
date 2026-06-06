@@ -15,6 +15,7 @@ from app.assistant.llm_client import LLMClient, sanitize_identity_response
 from app.assistant.missions import MissionController, get_mission_definitions
 from app.assistant.priority_engine import PriorityEngine
 from app.assistant.system_prompt import SYSTEM_PROMPT
+from app.assistant.session_state import open_best_match, open_result_by_index, session_state
 from app.config.personal_priority_rules import (
     add_sender_rule,
     add_subject_rule,
@@ -23,7 +24,9 @@ from app.config.personal_priority_rules import (
 )
 from app.config.priority_rules import load_priority_rules
 from app.assistant.watchers import WatcherController
+from app.tools.files.content_search_tool import ContentSearchTool
 from app.tools.files.file_creator import FileCreatorTool
+from app.tools.files.file_inspect_tool import FileInspectTool
 from app.tools.files.file_open_tool import FileOpenTool
 from app.tools.files.file_search_tool import FileSearchTool, get_file_search_status
 from app.logging_utils.audit import write_audit_log
@@ -132,6 +135,25 @@ class JsonCreateRequest(BaseModel):
 
 class FileOpenRequest(BaseModel):
     path: str = Field(min_length=1)
+
+
+class FileInspectRequest(BaseModel):
+    path: str = Field(min_length=1)
+    query: str | None = None
+
+
+class FileSummarizeRequest(BaseModel):
+    path: str = Field(min_length=1)
+    focus: str | None = None
+
+
+class FileExtractKeyFieldsRequest(BaseModel):
+    path: str = Field(min_length=1)
+    document_type: str | None = None
+
+
+class FileOpenResultRequest(BaseModel):
+    index: int = Field(ge=1)
 
 
 class WebResearchRequest(BaseModel):
@@ -289,6 +311,42 @@ def assistant_file_exports() -> dict[str, Any]:
 def assistant_file_search(q: str = Query(min_length=1), extension: str | None = None) -> dict[str, Any]:
     extensions = [extension] if extension else None
     return FileSearchTool().search_files(q, extensions=extensions)
+
+
+@app.get("/assistant/files/content-search")
+def assistant_file_content_search(q: str = Query(min_length=1), extension: str | None = None) -> dict[str, Any]:
+    extensions = [extension] if extension else None
+    return ContentSearchTool().search_file_contents(q, extensions=extensions)
+
+
+@app.post("/assistant/files/inspect")
+def assistant_file_inspect(request: FileInspectRequest) -> dict[str, Any]:
+    return FileInspectTool().inspect_file(request.path, request.query)
+
+
+@app.post("/assistant/files/summarize")
+def assistant_file_summarize(request: FileSummarizeRequest) -> dict[str, Any]:
+    return FileInspectTool().summarize_file(request.path, request.focus)
+
+
+@app.post("/assistant/files/extract-key-fields")
+def assistant_file_extract_key_fields(request: FileExtractKeyFieldsRequest) -> dict[str, Any]:
+    return FileInspectTool().extract_key_fields(request.path, request.document_type)
+
+
+@app.post("/assistant/files/open-best-match")
+def assistant_file_open_best_match() -> dict[str, Any]:
+    return open_best_match()
+
+
+@app.post("/assistant/files/open-result")
+def assistant_file_open_result(request: FileOpenResultRequest) -> dict[str, Any]:
+    return open_result_by_index(request.index)
+
+
+@app.get("/assistant/files/last-results")
+def assistant_file_last_results() -> dict[str, Any]:
+    return session_state.get_last_file_results()
 
 
 @app.get("/assistant/files/recent")
