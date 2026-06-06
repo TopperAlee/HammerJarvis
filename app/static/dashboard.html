@@ -118,6 +118,17 @@
         </article>
 
         <article class="card card-wide">
+          <h2>Dateien</h2>
+          <div class="button-row">
+            <button class="file-button dashboard-button" type="button" data-command="erstelle eine Excel fuer Ausgaben">Excel Ausgaben</button>
+            <button class="file-button dashboard-button" type="button" data-command="erstelle eine Vorlage Wartungsplan">Excel Wartungsplan</button>
+            <button class="file-button dashboard-button" type="button" data-command="exportiere EcoFlow Tageswerte als Excel">EcoFlow Excel</button>
+          </div>
+          <p id="fileStatus" class="muted">Noch keine Datei erstellt.</p>
+          <ul id="generatedFiles" class="warning-list"></ul>
+        </article>
+
+        <article class="card card-wide">
           <h2>Home Assistant Probleme</h2>
           <div id="problemCounts" class="counts">-</div>
           <ul id="problems" class="warning-list"></ul>

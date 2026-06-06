@@ -9,3 +9,5 @@ app/secrets/google/*.json
 app/secrets/**/*.json
 app/data/timetree/*.ics
 app/data/watchers/*.json
+workspace/exports/*
+!workspace/exports/.gitkeep

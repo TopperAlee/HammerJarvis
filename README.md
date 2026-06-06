@@ -316,6 +316,37 @@ POST http://127.0.0.1:8001/assistant/priority/personal-rules/subject
 DELETE http://127.0.0.1:8001/assistant/priority/personal-rules
 ```
 
+## Dateien erstellen
+
+Hammer Jarvis kann lokale Excel-, CSV-, Markdown- und JSON-Dateien erstellen.
+Alle generierten Dateien werden im lokalen Exportordner abgelegt:
+
+```text
+workspace/exports
+```
+
+Der Exportordner ist fuer lokale Arbeitsdateien gedacht. Er wird nicht in Git committed.
+Hammer Jarvis ueberschreibt bestehende Dateien nicht automatisch, sondern erzeugt bei Namenskonflikten einen neuen Dateinamen mit Suffix wie `_001`.
+Dateien werden nicht geloescht, und Pfade ausserhalb des Exportordners werden abgelehnt.
+
+Lokale Endpunkte:
+
+```text
+POST http://127.0.0.1:8001/assistant/files/create/excel
+POST http://127.0.0.1:8001/assistant/files/create/csv
+POST http://127.0.0.1:8001/assistant/files/create/markdown
+POST http://127.0.0.1:8001/assistant/files/create/json
+GET http://127.0.0.1:8001/assistant/files/exports
+```
+
+Beispiele fuer Sprach- oder Chatbefehle:
+
+```text
+Erstelle eine Excel fuer Ausgaben.
+Erstelle eine Vorlage Wartungsplan.
+Exportiere EcoFlow Tageswerte als Excel.
+```
+
 ## Tests
 
 ```powershell

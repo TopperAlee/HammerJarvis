@@ -3,6 +3,7 @@ from typing import Any
 from app.agent.permissions import ActionRisk
 from app.assistant.schemas import RegisteredTool
 from app.logging_utils.audit import write_audit_log
+from app.tools.files.file_creator import FileCreatorTool
 from app.tools.home_assistant import HomeAssistantTool
 from app.tools.productivity.calendar_service import CalendarService
 from app.tools.productivity.email_service import EmailService
@@ -122,6 +123,7 @@ class ToolRegistry:
         calendar_service = CalendarService()
         timetree_provider = TimeTreeProvider()
         gmail_provider = GmailProvider()
+        file_creator = FileCreatorTool()
 
         self.register(
             "home_assistant_get_problems",
@@ -225,6 +227,46 @@ class ToolRegistry:
             ActionRisk.GREEN,
             lambda message: {"message": message},
             {"message": "string"},
+            False,
+        )
+        self.register(
+            "file_create_excel",
+            "Erstellt lokale Excel-Dateien im Export-Verzeichnis.",
+            ActionRisk.GREEN,
+            file_creator.create_excel_file,
+            {"title": "string", "sheets": "list", "filename": "string"},
+            False,
+        )
+        self.register(
+            "file_create_csv",
+            "Erstellt lokale CSV-Dateien im Export-Verzeichnis.",
+            ActionRisk.GREEN,
+            file_creator.create_csv_file,
+            {"headers": "list", "rows": "list", "filename": "string"},
+            False,
+        )
+        self.register(
+            "file_create_markdown",
+            "Erstellt lokale Markdown-Dateien im Export-Verzeichnis.",
+            ActionRisk.GREEN,
+            file_creator.create_markdown_file,
+            {"title": "string", "content": "string", "filename": "string"},
+            False,
+        )
+        self.register(
+            "file_create_json",
+            "Erstellt lokale JSON-Dateien im Export-Verzeichnis.",
+            ActionRisk.GREEN,
+            file_creator.create_json_file,
+            {"data": "dict", "filename": "string"},
+            False,
+        )
+        self.register(
+            "file_list_exports",
+            "Listet lokal erzeugte Export-Dateien.",
+            ActionRisk.GREEN,
+            file_creator.list_exports,
+            {},
             False,
         )
         self.register(

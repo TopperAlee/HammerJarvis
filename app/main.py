@@ -23,6 +23,7 @@ from app.config.personal_priority_rules import (
 )
 from app.config.priority_rules import load_priority_rules
 from app.assistant.watchers import WatcherController
+from app.tools.files.file_creator import FileCreatorTool
 from app.logging_utils.audit import write_audit_log
 from app.tools.home_assistant import HomeAssistantTool
 from app.tools.productivity.calendar_service import CalendarService
@@ -101,6 +102,29 @@ class PersonalPriorityRemoveRequest(BaseModel):
 class EntityActionRequest(BaseModel):
     entity_id: str = Field(min_length=1)
     confirm: bool = False
+
+
+class ExcelCreateRequest(BaseModel):
+    title: str = Field(min_length=1)
+    sheets: list[dict[str, Any]]
+    filename: str | None = None
+
+
+class CsvCreateRequest(BaseModel):
+    headers: list[str]
+    rows: list[list[Any]] = []
+    filename: str | None = None
+
+
+class MarkdownCreateRequest(BaseModel):
+    title: str = Field(min_length=1)
+    content: str = ""
+    filename: str | None = None
+
+
+class JsonCreateRequest(BaseModel):
+    data: dict[str, Any]
+    filename: str | None = None
 
 
 @app.get("/")
@@ -211,6 +235,43 @@ def assistant_watcher_clear() -> dict[str, bool]:
 @app.get("/assistant/watchers/status")
 def assistant_watcher_status() -> dict[str, Any]:
     return WatcherController().status()
+
+
+@app.post("/assistant/files/create/excel")
+def assistant_create_excel(request: ExcelCreateRequest) -> dict[str, Any]:
+    try:
+        return FileCreatorTool().create_excel_file(request.title, request.sheets, request.filename)
+    except Exception as exc:
+        raise _to_http_exception(exc) from exc
+
+
+@app.post("/assistant/files/create/csv")
+def assistant_create_csv(request: CsvCreateRequest) -> dict[str, Any]:
+    try:
+        return FileCreatorTool().create_csv_file(request.headers, request.rows, request.filename)
+    except Exception as exc:
+        raise _to_http_exception(exc) from exc
+
+
+@app.post("/assistant/files/create/markdown")
+def assistant_create_markdown(request: MarkdownCreateRequest) -> dict[str, Any]:
+    try:
+        return FileCreatorTool().create_markdown_file(request.title, request.content, request.filename)
+    except Exception as exc:
+        raise _to_http_exception(exc) from exc
+
+
+@app.post("/assistant/files/create/json")
+def assistant_create_json(request: JsonCreateRequest) -> dict[str, Any]:
+    try:
+        return FileCreatorTool().create_json_file(request.data, request.filename)
+    except Exception as exc:
+        raise _to_http_exception(exc) from exc
+
+
+@app.get("/assistant/files/exports")
+def assistant_file_exports() -> dict[str, Any]:
+    return FileCreatorTool().list_exports()
 
 
 @app.get("/assistant/llm/status")

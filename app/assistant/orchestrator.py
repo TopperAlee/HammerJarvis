@@ -35,6 +35,9 @@ class AssistantOrchestrator:
         watcher_response = _handle_watcher_command(normalized)
         if watcher_response:
             return watcher_response
+        file_response = self._handle_file_command(normalized)
+        if file_response:
+            return file_response
         mission_controller = MissionController(registry=self.registry)
         mission_name = mission_controller.detect_mission(message)
         if mission_name:
@@ -276,6 +279,33 @@ class AssistantOrchestrator:
             "result": result,
         }
 
+    def _handle_file_command(self, normalized: str) -> dict[str, Any] | None:
+        if not _is_file_create_intent(normalized):
+            return None
+        template = _file_template_for_message(normalized)
+        if template is None:
+            return {
+                "mode": "rule_based",
+                "tool": "file_create_clarification",
+                "answer": (
+                    "Welche Datei soll ich erstellen? Moeglich sind zum Beispiel "
+                    "Excel fuer Ausgaben, Wartungsplan oder EcoFlow Tageswerte."
+                ),
+                "risk": ActionRisk.GREEN,
+            }
+        executed = self.registry.execute_tool("file_create_excel", template, confirm=False)
+        result = executed.get("result", executed)
+        answer = f"Ich habe die Excel-Datei erstellt:\n{result.get('path', '')}".strip()
+        return {
+            "mode": "rule_based",
+            "tool": "file_create_excel",
+            "executed_tool": "file_create_excel",
+            "answer": answer,
+            "risk": ActionRisk.GREEN,
+            "result": result,
+            **{key: result[key] for key in ("created", "file_type", "filename", "path", "message") if key in result},
+        }
+
 
 def _is_ecoflow_intent(message: str) -> bool:
     return any(
@@ -295,6 +325,87 @@ def _is_ecoflow_intent(message: str) -> bool:
             "verbrauch",
         )
     )
+
+
+def _is_file_create_intent(message: str) -> bool:
+    return any(
+        term in message
+        for term in (
+            "excel",
+            "xlsx",
+            "tabelle",
+            "spreadsheet",
+            "csv",
+            "datei erstellen",
+            "vorlage erstellen",
+            "erstelle eine excel",
+            "erstelle mir eine excel",
+            "mach mir eine tabelle",
+            "erstelle eine csv",
+            "erstelle eine datei",
+            "erstelle eine vorlage",
+            "exportiere als excel",
+            "exportiere",
+        )
+    )
+
+
+def _file_template_for_message(message: str) -> dict[str, Any] | None:
+    if "ausgaben" in message:
+        return {
+            "title": "Ausgaben",
+            "filename": "ausgaben.xlsx",
+            "sheets": [
+                {
+                    "name": "Ausgaben",
+                    "headers": ["Datum", "Kategorie", "Beschreibung", "Betrag", "Zahlungsart", "Notiz"],
+                    "rows": [],
+                }
+            ],
+        }
+    if "wartungsplan" in message:
+        return {
+            "title": "Wartungsplan",
+            "filename": "wartungsplan.xlsx",
+            "sheets": [
+                {
+                    "name": "Wartungsplan",
+                    "headers": [
+                        "Maschine",
+                        "Bereich",
+                        "Aufgabe",
+                        "Intervall",
+                        "Verantwortlich",
+                        "Letzte Wartung",
+                        "Naechste Wartung",
+                        "Status",
+                    ],
+                    "rows": [],
+                }
+            ],
+        }
+    if "ecoflow" in message and ("tageswerte" in message or "excel" in message):
+        return {
+            "title": "EcoFlow Tageswerte",
+            "filename": "ecoflow_tageswerte.xlsx",
+            "sheets": [
+                {
+                    "name": "EcoFlow Tageswerte",
+                    "headers": [
+                        "Datum",
+                        "Batterie %",
+                        "PV-Leistung W",
+                        "Netzleistung W",
+                        "Smart Meter W",
+                        "Verbrauch Wh",
+                        "Netzbezug Wh",
+                        "Hinweis",
+                    ],
+                    "rows": [],
+                }
+            ],
+        }
+    return None
 
 
 def _known_tool_route(

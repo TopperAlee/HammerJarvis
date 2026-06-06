@@ -21,6 +21,9 @@ const elements = {
   watcherAlerts: document.getElementById("watcherAlerts"),
   runWatchers: document.getElementById("runWatchers"),
   refreshWatchers: document.getElementById("refreshWatchers"),
+  fileStatus: document.getElementById("fileStatus"),
+  generatedFiles: document.getElementById("generatedFiles"),
+  fileButtons: document.querySelectorAll(".file-button"),
   problemCounts: document.getElementById("problemCounts"),
   problems: document.getElementById("problems"),
   voiceCard: document.getElementById("voiceCard"),
@@ -126,6 +129,17 @@ function renderWatcherAlert(alert) {
     action.className = "muted";
     action.textContent = alert.recommended_action;
     wrapper.appendChild(action);
+  }
+  return wrapper;
+}
+
+function renderGeneratedFile(file) {
+  const wrapper = document.createElement("span");
+  wrapper.textContent = file.filename || "Datei";
+  if (file.path) {
+    const code = document.createElement("code");
+    code.textContent = ` ${file.path}`;
+    wrapper.appendChild(code);
   }
   return wrapper;
 }
@@ -263,7 +277,7 @@ function startVoiceRecognition() {
   recognition.start();
 }
 
-function updateDashboard(energy, problems, watcherData) {
+function updateDashboard(energy, problems, watcherData, filesData) {
   const humanStatus = energy.human_status || {};
   elements.errorPanel.hidden = true;
   setStatus(humanStatus.overall);
@@ -291,6 +305,8 @@ function updateDashboard(energy, problems, watcherData) {
   elements.watcherCounts.textContent = `Aktive Hinweise: ${alerts.length}`;
   renderList(elements.watcherAlerts, alerts, renderWatcherAlert);
 
+  renderList(elements.generatedFiles, filesData.files || [], renderGeneratedFile);
+
   const problemCritical = problems.critical_count ?? 0;
   const problemWarning = problems.warning_count ?? 0;
   const problemInfo = problems.informational_count ?? 0;
@@ -306,12 +322,13 @@ function updateDashboard(energy, problems, watcherData) {
 
 async function refresh() {
   try {
-    const [energy, problems, watcherData] = await Promise.all([
+    const [energy, problems, watcherData, filesData] = await Promise.all([
       fetchJson("/ha/ecoflow/energy"),
       fetchJson("/ha/problems"),
       fetchJson("/assistant/watchers/alerts"),
+      fetchJson("/assistant/files/exports"),
     ]);
-    updateDashboard(energy, problems, watcherData);
+    updateDashboard(energy, problems, watcherData, filesData);
   } catch (error) {
     elements.errorPanel.hidden = false;
     setStatus("critical");
@@ -369,6 +386,15 @@ function initializeVoiceControls() {
       elements.errorPanel.hidden = false;
     }
   });
+  for (const button of elements.fileButtons) {
+    button.addEventListener("click", async () => {
+      const command = button.dataset.command || "";
+      elements.fileStatus.textContent = "Datei wird erstellt...";
+      const response = await postJson("/assistant/chat", { message: command, confirm: false });
+      elements.fileStatus.textContent = response.answer || "Datei wurde erstellt.";
+      await refresh();
+    });
+  }
 }
 
 initializeVoiceControls();
