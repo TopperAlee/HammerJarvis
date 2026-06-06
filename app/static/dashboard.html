@@ -3,173 +3,225 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Hammer Jarvis</title>
-    <link rel="stylesheet" href="/static/dashboard.css">
+    <title>Hammer Jarvis HUD</title>
+    <link rel="stylesheet" href="/static/dashboard.css?v=jarvis-hud-1">
   </head>
   <body>
-    <main class="shell">
-      <header class="topbar">
-        <div>
-          <h1>Hammer Jarvis</h1>
-          <p id="updatedAt">Lade lokale Daten...</p>
+    <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
+    <div class="hud-shell">
+      <aside class="side-nav" aria-label="Dashboard Navigation">
+        <div class="brand-block">
+          <div class="brand-mark">HJ</div>
+          <div>
+            <h1>HAMMER JARVIS</h1>
+            <span>HUD v2</span>
+          </div>
         </div>
-        <div id="statusBadge" class="status-badge status-unknown">Unbekannt</div>
-      </header>
+        <nav class="nav-stack">
+          <a href="#mission">◇ Mission Control</a>
+          <a href="#energy">⚡ Energie</a>
+          <a href="#home">⌂ Haus</a>
+          <a href="#communication">✉ Kommunikation</a>
+          <a href="#calendar">◷ Kalender</a>
+          <a href="#files">▣ Dateien</a>
+          <a href="#research">⌕ Recherche</a>
+          <a href="#alerts">△ Alerts</a>
+          <a href="#chat">● Chat</a>
+        </nav>
+        <div class="sidebar-stats">
+          <div><span>LLM</span><strong id="llmProvider">-</strong></div>
+          <div><span>Status</span><strong>Lokal</strong></div>
+          <div><span>Voice</span><strong id="voiceMiniStatus">Bereit</strong></div>
+        </div>
+      </aside>
 
-      <section id="errorPanel" class="error-panel" hidden>
-        Verbindung zum Hammer-Jarvis-Backend fehlgeschlagen.
-      </section>
+      <main class="command-center">
+        <header class="top-hud">
+          <div class="top-tabs" aria-label="Bereiche">
+            <span class="active">Übersicht</span>
+            <span>System</span>
+            <span>Daten</span>
+            <span>Netzwerk</span>
+            <span>Sicherheit</span>
+            <span>Einstellungen</span>
+          </div>
+          <div class="top-indicators">
+            <span id="weatherPlaceholder">Wetter: lokal</span>
+            <span id="currentTime">--:--:--</span>
+            <span id="statusBadge" class="status-badge status-unknown">Unbekannt</span>
+          </div>
+        </header>
 
-      <section class="grid">
-        <article class="card card-wide">
-          <h2>Systemstatus</h2>
-          <p id="headline" class="headline">Noch keine Daten.</p>
-          <ul id="details" class="details"></ul>
-        </article>
+        <section id="errorPanel" class="error-panel" hidden>
+          Verbindung zum Hammer-Jarvis-Backend fehlgeschlagen.
+        </section>
 
-        <article id="voiceCard" class="card card-wide voice-card">
-          <h2>Jarvis Sprachsteuerung</h2>
-          <div class="voice-controls">
-            <input
-              id="commandInput"
-              class="command-input"
-              type="text"
-              autocomplete="off"
-              placeholder="Befehl eingeben oder sprechen..."
-            >
-            <div class="button-row">
-              <button id="sendCommand" class="dashboard-button" type="button">Senden</button>
-              <button id="voiceButton" class="dashboard-button primary" type="button">Sprechen</button>
-              <button id="speechToggle" class="dashboard-button" type="button">Sprachausgabe: Ein</button>
+        <section class="hud-grid">
+          <section id="mission" class="hud-panel mission-panel">
+            <div class="panel-heading">
+              <span>Daily Briefing</span>
+              <button class="ghost-button quick-command" type="button" data-command="Tagesstatus">Tagesstatus</button>
             </div>
-          </div>
-          <div class="quick-buttons" aria-label="Schnellbefehle">
-            <button class="quick-button" type="button" data-command="Was macht EcoFlow gerade?">Was macht EcoFlow gerade?</button>
-            <button class="quick-button" type="button" data-command="EcoFlow Energie">EcoFlow Energie</button>
-            <button class="quick-button" type="button" data-command="Welche Geräte haben Probleme?">Welche Geräte haben Probleme?</button>
-            <button class="quick-button" type="button" data-command="Home Assistant Diagnose">Home Assistant Diagnose</button>
-            <button class="quick-button" type="button" data-command="Tagesstatus">Tagesstatus</button>
-            <button class="quick-button" type="button" data-command="Hauscheck">Hauscheck</button>
-            <button class="quick-button" type="button" data-command="Energiecheck">Energiecheck</button>
-            <button class="quick-button" type="button" data-command="Posteingang">Posteingang</button>
-            <button class="quick-button" type="button" data-command="Familienkalender">Familienkalender</button>
-          </div>
-          <div class="voice-output">
-            <div>
-              <h3>Sprachstatus</h3>
-              <p id="voiceStatus" class="voice-status">Sprachsteuerung bereit.</p>
+            <p id="headline" class="headline">Lokale Systeme werden synchronisiert.</p>
+            <ul id="details" class="signal-list"></ul>
+            <div class="briefing-metrics">
+              <div><span>Neue E-Mails</span><strong id="emailCount">-</strong></div>
+              <div><span>Termine heute</span><strong id="eventCount">-</strong></div>
+              <div><span>Systemwarnungen</span><strong id="warningTotal">-</strong></div>
+              <div><span>Hinweise</span><strong id="alertCount">-</strong></div>
             </div>
-            <div>
-              <h3>Erkannter Befehl</h3>
-              <p id="recognizedCommand">-</p>
+          </section>
+
+          <section class="core-stage" aria-label="Hammer Jarvis Core">
+            <div id="voiceCard" class="jarvis-core">
+              <div class="core-ring ring-one"></div>
+              <div class="core-ring ring-two"></div>
+              <div class="core-ring ring-three"></div>
+              <div class="core-center">
+                <span>HAMMER</span>
+                <strong>JARVIS</strong>
+                <em>AKTIV &amp; BEREIT</em>
+              </div>
+              <div class="waveform" aria-hidden="true">
+                <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+              </div>
             </div>
-            <div>
-              <h3>Jarvis Antwort</h3>
-              <p id="jarvisAnswer">-</p>
+            <button id="voiceButton" class="core-mic" type="button">Sprechen</button>
+            <p id="voiceStatus" class="voice-status">Sprachsteuerung bereit.</p>
+          </section>
+
+          <section id="energy" class="hud-panel energy-panel">
+            <div class="panel-heading">
+              <span>EcoFlow Energie</span>
+              <button class="ghost-button quick-command" type="button" data-command="Energiecheck">Energiecheck</button>
             </div>
-          </div>
-        </article>
+            <div class="energy-readout">
+              <div class="battery-orb"><span id="soc">-</span></div>
+              <div>
+                <p id="ecoflowSummary" class="muted">Warte auf EcoFlow-Daten.</p>
+                <div id="ecoflowOverall" class="status-line">-</div>
+              </div>
+            </div>
+            <div class="metric-grid">
+              <div><span>PV-Leistung</span><strong id="pvPower">-</strong></div>
+              <div><span>Netzleistung System</span><strong id="gridPower">-</strong></div>
+              <div><span>LAN Smart Meter</span><strong id="smartMeter">-</strong></div>
+              <div><span>Batterieleistung roh</span><strong id="batteryPower">-</strong></div>
+            </div>
+            <div id="warningCounts" class="warning-strip">Warnungen: -</div>
+            <ul id="warnings" class="signal-list compact"></ul>
+          </section>
 
-        <article class="card">
-          <h2>EcoFlow Status</h2>
-          <div id="ecoflowOverall" class="metric">-</div>
-          <p id="ecoflowSummary" class="muted">Warte auf Antwort.</p>
-        </article>
+          <section id="home" class="hud-panel home-panel">
+            <div class="panel-heading">
+              <span>Home Assistant</span>
+              <button class="ghost-button quick-command" type="button" data-command="Hauscheck">Hauscheck</button>
+            </div>
+            <div id="problemCounts" class="counts">Kritisch: - | Warnung: - | Info: -</div>
+            <ul id="problems" class="signal-list compact"></ul>
+          </section>
 
-        <article class="card">
-          <h2>Batterie</h2>
-          <div id="soc" class="metric">-</div>
-        </article>
+          <section id="communication" class="hud-panel mail-panel">
+            <div class="panel-heading">
+              <span>Gmail Posteingang</span>
+              <button class="ghost-button quick-command" type="button" data-command="Posteingang prüfen">Posteingang prüfen</button>
+            </div>
+            <p id="emailStatus" class="muted">Posteingang wird geprüft.</p>
+            <ul id="emailList" class="signal-list compact"></ul>
+          </section>
 
-        <article class="card">
-          <h2>PV-Leistung</h2>
-          <div id="pvPower" class="metric">-</div>
-        </article>
+          <section id="calendar" class="hud-panel calendar-panel">
+            <div class="panel-heading">
+              <span>TimeTree Heute</span>
+              <button class="ghost-button quick-command" type="button" data-command="Familienkalender">Familienkalender</button>
+            </div>
+            <ul id="todayEvents" class="signal-list compact"></ul>
+          </section>
 
-        <article class="card">
-          <h2>Netzleistung System</h2>
-          <div id="gridPower" class="metric">-</div>
-        </article>
+          <section id="files" class="hud-panel files-panel">
+            <div class="panel-heading">
+              <span>Dateien / OneDrive</span>
+              <button id="openLatestFile" class="ghost-button" type="button">Letzte Datei öffnen</button>
+            </div>
+            <div class="control-row">
+              <input id="fileSearchInput" type="text" autocomplete="off" placeholder="Datei oder Inhalt suchen...">
+              <select id="fileSearchMode" aria-label="Suchmodus">
+                <option value="path">Dateiname/Pfad</option>
+                <option value="content">Dateiinhalt</option>
+              </select>
+              <button id="fileSearchButton" type="button">Dateien suchen</button>
+            </div>
+            <div class="quick-row">
+              <button class="ghost-button file-button" type="button" data-command="erstelle eine Excel fuer Ausgaben">Excel Ausgaben</button>
+              <button id="fileContentSearchButton" class="ghost-button" type="button">Inhalte durchsuchen</button>
+            </div>
+            <p id="fileStatus" class="muted">Bereit für lokale Dateisuche.</p>
+            <ul id="fileSearchResults" class="signal-list compact"></ul>
+            <ul id="generatedFiles" class="signal-list compact"></ul>
+          </section>
 
-        <article class="card">
-          <h2>LAN Smart Meter</h2>
-          <div id="smartMeter" class="metric">-</div>
-        </article>
+          <section id="research" class="hud-panel research-panel">
+            <div class="panel-heading">
+              <span>Web Recherche</span>
+              <button id="webResearchButton" class="ghost-button" type="button">Recherchieren</button>
+            </div>
+            <div class="control-row single">
+              <input id="webResearchInput" type="text" autocomplete="off" placeholder="Recherchefrage eingeben...">
+            </div>
+            <p id="webResearchStatus" class="muted">Noch keine Recherche ausgeführt.</p>
+            <div id="webResearchAnswer" class="research-answer">-</div>
+            <ul id="webResearchSources" class="signal-list compact"></ul>
+          </section>
 
-        <article class="card">
-          <h2>Batterieleistung roh</h2>
-          <div id="batteryPower" class="metric">-</div>
-        </article>
+          <section id="alerts" class="hud-panel alerts-panel">
+            <div class="panel-heading">
+              <span>Proaktive Hinweise</span>
+              <button id="runWatchers" class="ghost-button warning-action" type="button">Jetzt prüfen</button>
+            </div>
+            <div id="watcherCounts" class="counts">Aktive Hinweise: -</div>
+            <button id="refreshWatchers" class="ghost-button small-action" type="button">Hinweise aktualisieren</button>
+            <ul id="watcherAlerts" class="signal-list compact"></ul>
+          </section>
 
-        <article class="card card-wide">
-          <h2>Warnungen</h2>
-          <div id="warningCounts" class="counts">-</div>
-          <ul id="warnings" class="warning-list"></ul>
-        </article>
+          <section id="chat" class="hud-panel chat-panel">
+            <div class="panel-heading">
+              <span>Chat Konsole</span>
+              <button id="speechToggle" class="ghost-button" type="button">Sprachausgabe: Ein</button>
+            </div>
+            <div id="chatLog" class="chat-log" aria-live="polite">
+              <div class="chat-message assistant">
+                <span>Jarvis</span>
+                <p>Bereit. Lokale Werkzeuge sind verbunden.</p>
+                <time>System</time>
+              </div>
+            </div>
+            <div class="recognized-row">
+              <span>Erkannter Befehl</span>
+              <strong id="recognizedCommand">-</strong>
+            </div>
+            <div class="recognized-row">
+              <span>Jarvis Antwort</span>
+              <strong id="jarvisAnswer">-</strong>
+            </div>
+            <div class="chat-input-row">
+              <input id="commandInput" type="text" autocomplete="off" placeholder="Befehl eingeben oder sprechen...">
+              <button id="sendCommand" type="button">Senden</button>
+              <button id="chatMicButton" type="button">Mic</button>
+            </div>
+            <div class="quick-row">
+              <button class="quick-command" type="button" data-command="Tagesstatus">Tagesstatus</button>
+              <button class="quick-command" type="button" data-command="Hauscheck">Hauscheck</button>
+              <button class="quick-command" type="button" data-command="Energiecheck">Energiecheck</button>
+              <button class="quick-command" type="button" data-command="Posteingang">Posteingang</button>
+              <button class="quick-command" type="button" data-command="Familienkalender">Familienkalender</button>
+              <button class="quick-command" type="button" data-command="Dateien suchen">Dateien suchen</button>
+              <button class="quick-command" type="button" data-command="Web Recherche">Web Recherche</button>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
 
-        <article class="card card-wide">
-          <h2>Proaktive Hinweise</h2>
-          <div id="watcherCounts" class="counts">-</div>
-          <div class="button-row">
-            <button id="runWatchers" class="dashboard-button primary" type="button">Jetzt pruefen</button>
-            <button id="refreshWatchers" class="dashboard-button" type="button">Hinweise aktualisieren</button>
-          </div>
-          <ul id="watcherAlerts" class="warning-list"></ul>
-        </article>
-
-        <article class="card card-wide">
-          <h2>Dateien</h2>
-          <div class="button-row">
-            <button class="file-button dashboard-button" type="button" data-command="erstelle eine Excel fuer Ausgaben">Excel Ausgaben</button>
-            <button class="file-button dashboard-button" type="button" data-command="erstelle eine Vorlage Wartungsplan">Excel Wartungsplan</button>
-            <button class="file-button dashboard-button" type="button" data-command="exportiere EcoFlow Tageswerte als Excel">EcoFlow Excel</button>
-          </div>
-          <div class="file-search-controls">
-            <input
-              id="fileSearchInput"
-              class="command-input"
-              type="text"
-              autocomplete="off"
-              placeholder="Datei suchen..."
-            >
-            <select id="fileSearchMode" class="command-input select-input">
-              <option value="path">Dateiname/Pfad</option>
-              <option value="content">Dateiinhalt</option>
-            </select>
-            <button id="fileSearchButton" class="dashboard-button" type="button">Suchen</button>
-            <button id="fileContentSearchButton" class="dashboard-button" type="button">Inhalte durchsuchen</button>
-            <button id="openLatestFile" class="dashboard-button" type="button">Letzte Datei oeffnen</button>
-          </div>
-          <p id="fileStatus" class="muted">Noch keine Datei erstellt.</p>
-          <ul id="fileSearchResults" class="warning-list"></ul>
-          <ul id="generatedFiles" class="warning-list"></ul>
-        </article>
-
-        <article class="card card-wide">
-          <h2>Internetrecherche</h2>
-          <div class="file-search-controls">
-            <input
-              id="webResearchInput"
-              class="command-input"
-              type="text"
-              autocomplete="off"
-              placeholder="Recherchefrage eingeben..."
-            >
-            <button id="webResearchButton" class="dashboard-button" type="button">Recherchieren</button>
-          </div>
-          <p id="webResearchStatus" class="muted">Noch keine Recherche ausgefuehrt.</p>
-          <div id="webResearchAnswer" class="research-answer">-</div>
-          <ul id="webResearchSources" class="warning-list"></ul>
-        </article>
-
-        <article class="card card-wide">
-          <h2>Home Assistant Probleme</h2>
-          <div id="problemCounts" class="counts">-</div>
-          <ul id="problems" class="warning-list"></ul>
-        </article>
-      </section>
-    </main>
-
-    <script src="/static/dashboard.js"></script>
+    <script src="/static/dashboard.js?v=jarvis-hud-1"></script>
   </body>
 </html>
