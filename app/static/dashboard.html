@@ -124,8 +124,37 @@
             <button class="file-button dashboard-button" type="button" data-command="erstelle eine Vorlage Wartungsplan">Excel Wartungsplan</button>
             <button class="file-button dashboard-button" type="button" data-command="exportiere EcoFlow Tageswerte als Excel">EcoFlow Excel</button>
           </div>
+          <div class="file-search-controls">
+            <input
+              id="fileSearchInput"
+              class="command-input"
+              type="text"
+              autocomplete="off"
+              placeholder="Datei suchen..."
+            >
+            <button id="fileSearchButton" class="dashboard-button" type="button">Suchen</button>
+            <button id="openLatestFile" class="dashboard-button" type="button">Letzte Datei oeffnen</button>
+          </div>
           <p id="fileStatus" class="muted">Noch keine Datei erstellt.</p>
+          <ul id="fileSearchResults" class="warning-list"></ul>
           <ul id="generatedFiles" class="warning-list"></ul>
+        </article>
+
+        <article class="card card-wide">
+          <h2>Internetrecherche</h2>
+          <div class="file-search-controls">
+            <input
+              id="webResearchInput"
+              class="command-input"
+              type="text"
+              autocomplete="off"
+              placeholder="Recherchefrage eingeben..."
+            >
+            <button id="webResearchButton" class="dashboard-button" type="button">Recherchieren</button>
+          </div>
+          <p id="webResearchStatus" class="muted">Noch keine Recherche ausgefuehrt.</p>
+          <div id="webResearchAnswer" class="research-answer">-</div>
+          <ul id="webResearchSources" class="warning-list"></ul>
         </article>
 
         <article class="card card-wide">

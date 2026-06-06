@@ -173,6 +173,13 @@ h3 {
   gap: 12px;
 }
 
+.file-search-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 10px;
+  margin: 12px 0;
+}
+
 .command-input {
   width: 100%;
   border: 1px solid var(--border);
@@ -224,6 +231,12 @@ h3 {
   color: var(--orange);
 }
 
+.dashboard-button.inline-button {
+  margin-left: 10px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
 .quick-buttons {
   margin-top: 14px;
 }
@@ -265,6 +278,14 @@ h3 {
   line-height: 1.45;
 }
 
+.research-answer {
+  margin: 12px 0;
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--panel-strong);
+  line-height: 1.45;
+}
+
 code {
   font-family: Consolas, "Courier New", monospace;
   color: var(--text);
@@ -295,6 +316,10 @@ code {
   }
 
   .voice-output {
+    grid-template-columns: 1fr;
+  }
+
+  .file-search-controls {
     grid-template-columns: 1fr;
   }
 }

@@ -13,7 +13,9 @@ from app.assistant.tool_registry import ToolRegistry
 from app.assistant.watchers import WatcherController
 from app.config.personal_priority_rules import add_sender_rule
 from app.logging_utils.audit import write_audit_log
+from app.tools.files.file_search_tool import get_file_search_status
 from app.tools.productivity.email_service import clean_email_snippet
+from app.tools.web.web_research_tool import format_web_research_answer
 
 
 class AssistantOrchestrator:
@@ -38,6 +40,9 @@ class AssistantOrchestrator:
         file_response = self._handle_file_command(normalized)
         if file_response:
             return file_response
+        web_response = self._handle_web_research_command(message, normalized)
+        if web_response:
+            return web_response
         mission_controller = MissionController(registry=self.registry)
         mission_name = mission_controller.detect_mission(message)
         if mission_name:
@@ -280,6 +285,67 @@ class AssistantOrchestrator:
         }
 
     def _handle_file_command(self, normalized: str) -> dict[str, Any] | None:
+        if _is_onedrive_file_intent(normalized):
+            status = get_file_search_status()
+            if not status.get("onedrive_configured"):
+                return {
+                    "mode": "rule_based",
+                    "tool": "file_search_status",
+                    "executed_tool": "file_search_status",
+                    "answer": (
+                        "OneDrive ist lokal noch nicht als Suchordner konfiguriert. "
+                        "Setze FILE_SEARCH_ALLOWED_DIRS auf deinen OneDrive-Sync-Ordner."
+                    ),
+                    "risk": ActionRisk.GREEN,
+                    "result": status,
+                }
+
+        if _is_file_open_latest_intent(normalized):
+            result = self.registry.run("file_open_latest_export")
+            return {
+                "mode": "rule_based",
+                "tool": "file_open_latest_export",
+                "executed_tool": "file_open_latest_export",
+                "answer": str(result.get("message", "Datei wurde geoeffnet.")),
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+
+        if _is_file_open_intent(normalized):
+            query, extension = _file_query_and_extension(normalized)
+            result = self.registry.run("file_search", query=query, extensions=[extension] if extension else None, limit=5)
+            files = result.get("files", [])
+            if len(files) == 1:
+                opened = self.registry.run("file_open", path=str(files[0]["path"]))
+                return {
+                    "mode": "rule_based",
+                    "tool": "file_open",
+                    "executed_tool": "file_open",
+                    "answer": str(opened.get("message", "")),
+                    "risk": ActionRisk.GREEN,
+                    "result": opened,
+                }
+            return {
+                "mode": "rule_based",
+                "tool": "file_search",
+                "executed_tool": "file_search",
+                "answer": _format_file_search_answer(result, ask_to_choose=True),
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+
+        if _is_file_search_intent(normalized):
+            query, extension = _file_query_and_extension(normalized)
+            result = self.registry.run("file_search", query=query, extensions=[extension] if extension else None)
+            return {
+                "mode": "rule_based",
+                "tool": "file_search",
+                "executed_tool": "file_search",
+                "answer": _format_file_search_answer(result),
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+
         if not _is_file_create_intent(normalized):
             return None
         template = _file_template_for_message(normalized)
@@ -304,6 +370,20 @@ class AssistantOrchestrator:
             "risk": ActionRisk.GREEN,
             "result": result,
             **{key: result[key] for key in ("created", "file_type", "filename", "path", "message") if key in result},
+        }
+
+    def _handle_web_research_command(self, original: str, normalized: str) -> dict[str, Any] | None:
+        if not _is_web_research_intent(normalized):
+            return None
+        query = _web_research_query(original, normalized)
+        result = self.registry.run("web_research", query=query)
+        return {
+            "mode": "rule_based",
+            "tool": "web_research",
+            "executed_tool": "web_research",
+            "answer": format_web_research_answer(result),
+            "risk": ActionRisk.GREEN,
+            "result": result,
         }
 
 
@@ -348,6 +428,159 @@ def _is_file_create_intent(message: str) -> bool:
             "exportiere",
         )
     )
+
+
+def _is_file_search_intent(message: str) -> bool:
+    return any(
+        term in message
+        for term in (
+            "onedrive",
+            "one drive",
+            "datei suchen",
+            "finde datei",
+            "suche datei",
+            "wo ist",
+            "finde excel",
+            "finde die excel",
+            "finde die excel mit",
+            "finde pdf",
+            "suche nach",
+            "suche in onedrive",
+            "suche in one drive",
+            "finde die datei mit",
+        )
+    )
+
+
+def _is_onedrive_file_intent(message: str) -> bool:
+    return "onedrive" in message or "one drive" in message
+
+
+def _is_file_open_latest_intent(message: str) -> bool:
+    return any(
+        term in message
+        for term in (
+            "oeffne letzte datei",
+            "oeffne die letzte datei",
+            "oeffne die letzte erstellte datei",
+            "oeffne letzte erstellte datei",
+            "oeffne die letzte excel",
+            "öffne letzte datei",
+            "öffne die letzte datei",
+            "öffne die letzte erstellte datei",
+            "öffne letzte erstellte datei",
+            "öffne die letzte excel",
+        )
+    )
+
+
+def _is_file_open_intent(message: str) -> bool:
+    return any(
+        term in message
+        for term in (
+            "oeffne die datei",
+            "oeffne datei",
+            "oeffne ausgaben",
+            "oeffne die erstellte datei",
+            "öffne die datei",
+            "öffne datei",
+            "öffne ausgaben",
+            "öffne die erstellte datei",
+        )
+    )
+
+
+def _file_query_and_extension(message: str) -> tuple[str, str | None]:
+    extension: str | None = None
+    if "excel" in message or "xlsx" in message:
+        extension = ".xlsx"
+    elif "pdf" in message:
+        extension = ".pdf"
+    elif "csv" in message:
+        extension = ".csv"
+
+    query = message
+    for token in (
+        "suche in onedrive nach",
+        "suche in one drive nach",
+        "suche in onedrive",
+        "suche in one drive",
+        "finde die datei mit",
+        "finde datei",
+        "datei suchen",
+        "suche datei",
+        "suche nach",
+        "wo ist",
+        "finde excel mit",
+        "finde die excel mit",
+        "finde excel",
+        "finde pdf",
+        "oeffne die datei",
+        "oeffne datei",
+        "oeffne",
+        "öffne die datei",
+        "öffne datei",
+        "öffne",
+        "meinen",
+        "meine",
+        "die",
+        "mit",
+        "onedrive",
+        "one drive",
+    ):
+        query = query.replace(token, " ")
+    query = query.replace(".xlsx", " ").replace("excel", " ").replace("pdf", " ").replace("csv", " ")
+    query = re.sub(r"[?.!,;:]", " ", query)
+    query = re.sub(r"\s+", " ", query).strip()
+    return (query or message.strip(), extension)
+
+
+def _format_file_search_answer(result: dict[str, Any], ask_to_choose: bool = False) -> str:
+    if not result.get("files"):
+        return "Ich habe in den erlaubten Ordnern keine passende Datei gefunden."
+    lines = [str(result.get("message", "0 Dateien gefunden."))]
+    for file in result.get("files", [])[:5]:
+        lines.append(f"- {file.get('name')}: {file.get('path')}")
+    if ask_to_choose and result.get("files"):
+        lines.append("Welche Datei soll ich oeffnen?")
+    return "\n".join(lines)
+
+
+def _is_web_research_intent(message: str) -> bool:
+    return any(
+        term in message
+        for term in (
+            "recherchiere",
+            "suche im internet",
+            "suche online",
+            "finde offizielle dokumentation",
+            "pruefe im internet",
+            "prüfe im internet",
+            "aktuelle informationen",
+            "websuche",
+        )
+    )
+
+
+def _web_research_query(original: str, normalized: str) -> str:
+    query = normalize_message(original, lowercase=False)
+    for token in (
+        "Jarvis",
+        "jarvis",
+        "recherchiere",
+        "suche im Internet nach",
+        "suche im internet nach",
+        "suche online nach",
+        "finde offizielle Dokumentation zu",
+        "finde offizielle dokumentation zu",
+        "prüfe im Internet",
+        "pruefe im internet",
+        "websuche",
+    ):
+        query = query.replace(token, " ")
+    query = re.sub(r"[?.!,;:]", " ", query)
+    query = re.sub(r"\s+", " ", query).strip()
+    return query or normalized
 
 
 def _file_template_for_message(message: str) -> dict[str, Any] | None:

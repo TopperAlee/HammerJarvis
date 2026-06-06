@@ -347,6 +347,73 @@ Erstelle eine Vorlage Wartungsplan.
 Exportiere EcoFlow Tageswerte als Excel.
 ```
 
+## Dateien suchen und oeffnen
+
+Hammer Jarvis kann lokale Dateien nur in explizit erlaubten Verzeichnissen suchen und oeffnen.
+Konfiguriere die erlaubten Ordner in deiner lokalen `.env`:
+
+```text
+FILE_SEARCH_ENABLED=true
+FILE_SEARCH_ALLOWED_DIRS=workspace/exports;C:/Users/alwin/OneDrive;C:/Users/alwin/Documents
+FILE_SEARCH_MAX_RESULTS=25
+```
+
+OneDrive kann ueber den lokal synchronisierten Ordner eingebunden werden.
+Jarvis durchsucht nicht automatisch das gesamte Laufwerk `C:\`.
+Dateien werden mit der Windows-Standardanwendung geoeffnet.
+Loeschen, Verschieben und Veraendern von Dateien ist nicht implementiert.
+Dateien ausserhalb der erlaubten Verzeichnisse werden blockiert.
+
+Lokale Endpunkte:
+
+```text
+GET http://127.0.0.1:8001/assistant/files/search?q=ausgaben&extension=.xlsx
+GET http://127.0.0.1:8001/assistant/files/recent
+POST http://127.0.0.1:8001/assistant/files/open
+POST http://127.0.0.1:8001/assistant/files/open-latest
+```
+
+Beispiele fuer Sprach- oder Chatbefehle:
+
+```text
+Finde die Excel mit meinen Ausgaben.
+Oeffne die letzte erstellte Datei.
+Oeffne ausgaben.xlsx.
+```
+
+## Internetrecherche
+
+Hammer Jarvis kann Webrecherche ueber eine lokale SearXNG-Instanz ausfuehren.
+Die Funktion ist standardmaessig deaktiviert und muss in der lokalen `.env` aktiviert werden:
+
+```text
+WEB_RESEARCH_ENABLED=true
+WEB_SEARCH_PROVIDER=searxng
+SEARXNG_BASE_URL=http://localhost:8080
+WEB_SEARCH_MAX_RESULTS=5
+WEB_FETCH_TIMEOUT_SECONDS=15
+```
+
+Jarvis beantwortet Recherchefragen nur mit Suchergebnissen und Quellen.
+Wenn die Websuche nicht konfiguriert oder SearXNG nicht erreichbar ist, gibt Jarvis eine klare Fehlermeldung zurueck.
+Es werden keine Dateien von Webseiten heruntergeladen und kein Code von Webseiten ausgefuehrt.
+
+Lokale Endpunkte:
+
+```text
+GET http://127.0.0.1:8001/assistant/web/status
+GET http://127.0.0.1:8001/assistant/web/search?q=Microsoft%20Graph
+POST http://127.0.0.1:8001/assistant/web/research
+```
+
+Beispiele:
+
+```text
+Recherchiere offizielle Dokumentation zu Microsoft Graph Search.
+Suche im Internet nach aktuellen Informationen zu Python 3.11.
+Pruefe im Internet, welche Dokumentation Microsoft zu OneDrive Search bereitstellt.
+```
+
 ## Tests
 
 ```powershell

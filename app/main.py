@@ -24,12 +24,15 @@ from app.config.personal_priority_rules import (
 from app.config.priority_rules import load_priority_rules
 from app.assistant.watchers import WatcherController
 from app.tools.files.file_creator import FileCreatorTool
+from app.tools.files.file_open_tool import FileOpenTool
+from app.tools.files.file_search_tool import FileSearchTool, get_file_search_status
 from app.logging_utils.audit import write_audit_log
 from app.tools.home_assistant import HomeAssistantTool
 from app.tools.productivity.calendar_service import CalendarService
 from app.tools.productivity.email_service import EmailService
 from app.tools.productivity.providers.gmail_provider import GmailProvider
 from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
+from app.tools.web.web_research_tool import WebResearchTool, get_web_research_status
 
 
 app = FastAPI(title="Hammer Jarvis", version="0.1")
@@ -125,6 +128,14 @@ class MarkdownCreateRequest(BaseModel):
 class JsonCreateRequest(BaseModel):
     data: dict[str, Any]
     filename: str | None = None
+
+
+class FileOpenRequest(BaseModel):
+    path: str = Field(min_length=1)
+
+
+class WebResearchRequest(BaseModel):
+    query: str = Field(min_length=1)
 
 
 @app.get("/")
@@ -272,6 +283,47 @@ def assistant_create_json(request: JsonCreateRequest) -> dict[str, Any]:
 @app.get("/assistant/files/exports")
 def assistant_file_exports() -> dict[str, Any]:
     return FileCreatorTool().list_exports()
+
+
+@app.get("/assistant/files/search")
+def assistant_file_search(q: str = Query(min_length=1), extension: str | None = None) -> dict[str, Any]:
+    extensions = [extension] if extension else None
+    return FileSearchTool().search_files(q, extensions=extensions)
+
+
+@app.get("/assistant/files/recent")
+def assistant_file_recent(limit: int = 10) -> dict[str, Any]:
+    return FileSearchTool().list_recent_exports(limit=limit)
+
+
+@app.get("/assistant/files/status")
+def assistant_file_status() -> dict[str, Any]:
+    return get_file_search_status()
+
+
+@app.post("/assistant/files/open")
+def assistant_file_open(request: FileOpenRequest) -> dict[str, Any]:
+    return FileOpenTool().open_file(request.path)
+
+
+@app.post("/assistant/files/open-latest")
+def assistant_file_open_latest() -> dict[str, Any]:
+    return FileOpenTool().open_latest_export()
+
+
+@app.get("/assistant/web/status")
+def assistant_web_status() -> dict[str, Any]:
+    return get_web_research_status()
+
+
+@app.get("/assistant/web/search")
+def assistant_web_search(q: str = Query(min_length=1)) -> dict[str, Any]:
+    return WebResearchTool().search_web(q)
+
+
+@app.post("/assistant/web/research")
+def assistant_web_research(request: WebResearchRequest) -> dict[str, Any]:
+    return WebResearchTool().research(request.query)
 
 
 @app.get("/assistant/llm/status")

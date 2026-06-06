@@ -22,8 +22,17 @@ const elements = {
   runWatchers: document.getElementById("runWatchers"),
   refreshWatchers: document.getElementById("refreshWatchers"),
   fileStatus: document.getElementById("fileStatus"),
+  fileSearchInput: document.getElementById("fileSearchInput"),
+  fileSearchButton: document.getElementById("fileSearchButton"),
+  openLatestFile: document.getElementById("openLatestFile"),
+  fileSearchResults: document.getElementById("fileSearchResults"),
   generatedFiles: document.getElementById("generatedFiles"),
   fileButtons: document.querySelectorAll(".file-button"),
+  webResearchInput: document.getElementById("webResearchInput"),
+  webResearchButton: document.getElementById("webResearchButton"),
+  webResearchStatus: document.getElementById("webResearchStatus"),
+  webResearchAnswer: document.getElementById("webResearchAnswer"),
+  webResearchSources: document.getElementById("webResearchSources"),
   problemCounts: document.getElementById("problemCounts"),
   problems: document.getElementById("problems"),
   voiceCard: document.getElementById("voiceCard"),
@@ -139,6 +148,41 @@ function renderGeneratedFile(file) {
   if (file.path) {
     const code = document.createElement("code");
     code.textContent = ` ${file.path}`;
+    wrapper.appendChild(code);
+  }
+  return wrapper;
+}
+
+function renderSearchResult(file) {
+  const wrapper = document.createElement("span");
+  wrapper.textContent = file.name || "Datei";
+  if (file.path) {
+    const code = document.createElement("code");
+    code.textContent = ` ${file.path}`;
+    wrapper.appendChild(code);
+    const openButton = document.createElement("button");
+    openButton.className = "dashboard-button inline-button";
+    openButton.type = "button";
+    openButton.textContent = "Oeffnen";
+    openButton.addEventListener("click", async () => {
+      try {
+        const response = await postJson("/assistant/files/open", { path: file.path });
+        elements.fileStatus.textContent = response.message || "Datei wurde geoeffnet.";
+      } catch (error) {
+        elements.fileStatus.textContent = "Datei konnte nicht geoeffnet werden.";
+      }
+    });
+    wrapper.appendChild(openButton);
+  }
+  return wrapper;
+}
+
+function renderWebSource(source) {
+  const wrapper = document.createElement("span");
+  wrapper.textContent = source.title || source.source || "Quelle";
+  if (source.url) {
+    const code = document.createElement("code");
+    code.textContent = ` ${source.url}`;
     wrapper.appendChild(code);
   }
   return wrapper;
@@ -395,6 +439,54 @@ function initializeVoiceControls() {
       await refresh();
     });
   }
+  elements.fileSearchButton.addEventListener("click", async () => {
+    const query = elements.fileSearchInput.value.trim();
+    if (!query) {
+      return;
+    }
+    try {
+      const response = await fetchJson(`/assistant/files/search?q=${encodeURIComponent(query)}`);
+      elements.fileStatus.textContent = response.message || "Suche abgeschlossen.";
+      renderList(elements.fileSearchResults, response.files || [], renderSearchResult);
+    } catch (error) {
+      elements.fileStatus.textContent = "Dateisuche fehlgeschlagen.";
+    }
+  });
+  elements.fileSearchInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      elements.fileSearchButton.click();
+    }
+  });
+  elements.openLatestFile.addEventListener("click", async () => {
+    try {
+      const response = await postJson("/assistant/files/open-latest", {});
+      elements.fileStatus.textContent = response.message || "Letzte Datei wurde geoeffnet.";
+    } catch (error) {
+      elements.fileStatus.textContent = "Letzte Datei konnte nicht geoeffnet werden.";
+    }
+  });
+  elements.webResearchButton.addEventListener("click", async () => {
+    const query = elements.webResearchInput.value.trim();
+    if (!query) {
+      return;
+    }
+    elements.webResearchStatus.textContent = "Recherche laeuft...";
+    elements.webResearchAnswer.textContent = "-";
+    renderList(elements.webResearchSources, [], renderWebSource);
+    try {
+      const response = await postJson("/assistant/web/research", { query });
+      elements.webResearchStatus.textContent = response.message || "Recherche abgeschlossen.";
+      elements.webResearchAnswer.textContent = response.summary || response.message || "Keine Zusammenfassung verfuegbar.";
+      renderList(elements.webResearchSources, response.sources || [], renderWebSource);
+    } catch (error) {
+      elements.webResearchStatus.textContent = "Internetrecherche fehlgeschlagen.";
+    }
+  });
+  elements.webResearchInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      elements.webResearchButton.click();
+    }
+  });
 }
 
 initializeVoiceControls();

@@ -4,11 +4,14 @@ from app.agent.permissions import ActionRisk
 from app.assistant.schemas import RegisteredTool
 from app.logging_utils.audit import write_audit_log
 from app.tools.files.file_creator import FileCreatorTool
+from app.tools.files.file_open_tool import FileOpenTool
+from app.tools.files.file_search_tool import FileSearchTool
 from app.tools.home_assistant import HomeAssistantTool
 from app.tools.productivity.calendar_service import CalendarService
 from app.tools.productivity.email_service import EmailService
 from app.tools.productivity.providers.gmail_provider import GmailProvider
 from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
+from app.tools.web.web_research_tool import WebResearchTool
 
 
 class ToolRegistry:
@@ -124,6 +127,9 @@ class ToolRegistry:
         timetree_provider = TimeTreeProvider()
         gmail_provider = GmailProvider()
         file_creator = FileCreatorTool()
+        file_search = FileSearchTool()
+        file_open = FileOpenTool()
+        web_research = WebResearchTool()
 
         self.register(
             "home_assistant_get_problems",
@@ -267,6 +273,54 @@ class ToolRegistry:
             ActionRisk.GREEN,
             file_creator.list_exports,
             {},
+            False,
+        )
+        self.register(
+            "file_search",
+            "Sucht lokale Dateien in erlaubten Verzeichnissen.",
+            ActionRisk.GREEN,
+            file_search.search_files,
+            {"query": "string", "extensions": "list", "limit": "integer"},
+            False,
+        )
+        self.register(
+            "file_list_recent_exports",
+            "Listet zuletzt erzeugte Export-Dateien.",
+            ActionRisk.GREEN,
+            file_search.list_recent_exports,
+            {"limit": "integer"},
+            False,
+        )
+        self.register(
+            "file_open",
+            "Oeffnet eine erlaubte lokale Datei mit der Windows-Standard-App.",
+            ActionRisk.GREEN,
+            file_open.open_file,
+            {"path": "string"},
+            False,
+        )
+        self.register(
+            "file_open_latest_export",
+            "Oeffnet die zuletzt erzeugte Export-Datei.",
+            ActionRisk.GREEN,
+            file_open.open_latest_export,
+            {},
+            False,
+        )
+        self.register(
+            "web_search",
+            "Fuehrt eine lokale Websuche ueber SearXNG aus.",
+            ActionRisk.GREEN,
+            web_research.search_web,
+            {"query": "string"},
+            False,
+        )
+        self.register(
+            "web_research",
+            "Recherchiert online und gibt Quellen zurueck.",
+            ActionRisk.GREEN,
+            web_research.research,
+            {"query": "string"},
             False,
         )
         self.register(
