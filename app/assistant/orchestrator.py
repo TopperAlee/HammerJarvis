@@ -1,13 +1,17 @@
-import json
+﻿import json
 import os
 import re
 from typing import Any
 
 from app.agent.core import normalize_message
 from app.agent.permissions import ActionRisk
+from app.assistant.actions.action_executor import ActionExecutor
+from app.assistant.actions.action_planner import ActionPlanner
+from app.assistant.actions.pending_action_store import pending_action_store
 from app.assistant.formatters.ecoflow_formatter import format_ecoflow_energy_answer
 from app.assistant.llm_client import LLMClient, sanitize_identity_response
 from app.assistant.missions import MissionController
+from app.assistant.skills.skill_registry import SkillRegistry
 from app.assistant.system_prompt import SYSTEM_PROMPT
 from app.assistant.tool_registry import ToolRegistry
 from app.assistant.watchers import WatcherController
@@ -37,6 +41,12 @@ class AssistantOrchestrator:
         watcher_response = _handle_watcher_command(normalized)
         if watcher_response:
             return watcher_response
+        action_response = self._handle_action_command(normalized)
+        if action_response:
+            return action_response
+        skill_response = self._handle_skill_command(message, normalized)
+        if skill_response:
+            return skill_response
         web_response = self._handle_web_research_command(message, normalized)
         if web_response:
             return web_response
@@ -53,11 +63,15 @@ class AssistantOrchestrator:
         mission_name = mission_controller.detect_mission(message)
         if mission_name:
             mission_result = mission_controller.run_mission(mission_name, message)
+            planned_actions = ActionPlanner().create_actions_from_mission(mission_result)
+            answer = _append_pending_actions(mission_result.get("answer", ""), planned_actions)
             return {
                 "mode": "mission",
                 "tool": mission_name,
                 "risk": ActionRisk.GREEN,
                 **mission_result,
+                "answer": answer,
+                "pending_actions": planned_actions,
             }
         known_route = _known_tool_route(message, normalized)
         if known_route:
@@ -150,13 +164,16 @@ class AssistantOrchestrator:
         first_response = self.llm_client.create_response_with_tools(messages, tools)
         tool_calls = first_response.get("tool_calls", [])
         if not tool_calls:
+            answer = sanitize_identity_response(
+                message,
+                first_response.get("text") or "",
+            )
+            if _contains_fake_placeholder(answer):
+                answer = _placeholder_guard_answer()
             return {
                 "mode": "llm",
                 "tool": "general_answer",
-                "answer": sanitize_identity_response(
-                    message,
-                    first_response.get("text") or "",
-                ),
+                "answer": answer,
                 "risk": ActionRisk.GREEN,
             }
 
@@ -181,13 +198,16 @@ class AssistantOrchestrator:
             tool_calls[:max_calls],
             tool_outputs,
         )
+        answer = sanitize_identity_response(
+            message,
+            final_response.get("text") or "",
+        )
+        if _contains_fake_placeholder(answer):
+            answer = _placeholder_guard_answer()
         return {
             "mode": "llm",
             "tool": "llm_orchestrator",
-            "answer": sanitize_identity_response(
-                message,
-                final_response.get("text") or "",
-            ),
+            "answer": answer,
             "risk": ActionRisk.GREEN,
             "tool_outputs": tool_outputs,
         }
@@ -290,6 +310,71 @@ class AssistantOrchestrator:
             "result": result,
         }
 
+    def _handle_skill_command(self, original: str, normalized: str) -> dict[str, Any] | None:
+        skill_name, input_data = _skill_route(original, normalized)
+        if not skill_name:
+            return None
+        if skill_name in {"document_summarize", "document_extract_key_fields"} and not input_data.get("path"):
+            return {
+                "mode": "rule_based",
+                "tool": skill_name,
+                "answer": (
+                    "Ich brauche zuerst eine Datei oder einen vorherigen Suchtreffer. "
+                    "Soll ich nach Kaufvertrag suchen?"
+                ),
+                "risk": ActionRisk.GREEN,
+                "result": {"missing_context": True},
+            }
+        result = SkillRegistry(self.registry).execute(skill_name, input_data)
+        public_tool = {
+            "document_summarize": "file_summarize",
+            "document_extract_key_fields": "file_extract_key_fields",
+        }.get(skill_name, skill_name)
+        return {
+            "mode": "skill",
+            "tool": public_tool,
+            "executed_tool": skill_name,
+            "answer": _format_skill_answer(skill_name, result),
+            "risk": ActionRisk.GREEN,
+            "result": result,
+        }
+
+    def _handle_action_command(self, normalized: str) -> dict[str, Any] | None:
+        if _is_pending_actions_query(normalized):
+            actions = pending_action_store.list_pending_actions()
+            return {
+                "mode": "rule_based",
+                "tool": "actions_pending",
+                "answer": _format_pending_actions(actions),
+                "risk": ActionRisk.GREEN,
+                "result": {"actions": actions, "count": len(actions)},
+            }
+        action = _pending_action_from_message(normalized)
+        if action and _is_action_reject_intent(normalized):
+            if not action:
+                return _action_not_found_response()
+            result = pending_action_store.reject_action(action["id"])
+            return {
+                "mode": "rule_based",
+                "tool": "action_reject",
+                "answer": f"Aktion abgelehnt: {result.get('title', '')}",
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+        if action and (_is_action_execute_intent(normalized) or _is_action_reference(normalized)):
+            result = ActionExecutor(registry=self.registry).execute(
+                action["id"],
+                confirm=_is_action_confirm_intent(normalized),
+            )
+            return {
+                "mode": "rule_based",
+                "tool": "action_execute",
+                "answer": _format_action_execution_answer(result),
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+        return None
+
     def _handle_file_command(self, normalized: str) -> dict[str, Any] | None:
         if _is_onedrive_file_intent(normalized):
             status = get_file_search_status()
@@ -343,13 +428,15 @@ class AssistantOrchestrator:
         if _is_file_search_intent(normalized):
             query, extensions = _file_query_and_extension(normalized)
             result = self.registry.run("file_search", query=query, extensions=extensions)
+            planned_actions = ActionPlanner().create_actions_from_file_search(result)
             return {
                 "mode": "rule_based",
                 "tool": "file_search",
                 "executed_tool": "file_search",
-                "answer": _format_file_search_answer(result),
+                "answer": _append_pending_actions(_format_file_search_answer(result), planned_actions),
                 "risk": ActionRisk.GREEN,
                 "result": result,
+                "pending_actions": planned_actions,
             }
 
         if not _is_file_create_intent(normalized):
@@ -383,13 +470,16 @@ class AssistantOrchestrator:
             return None
         query = _web_research_query(original, normalized)
         result = self.registry.run("web_research", query=query)
+        planned_actions = ActionPlanner().create_actions_from_web_research(result)
+        answer = _append_pending_actions(format_web_research_answer(result), planned_actions)
         return {
             "mode": "rule_based",
             "tool": "web_research",
             "executed_tool": "web_research",
-            "answer": format_web_research_answer(result),
+            "answer": answer,
             "risk": ActionRisk.GREEN,
             "result": result,
+            "pending_actions": planned_actions,
         }
 
     def _handle_file_content_command(self, normalized: str) -> dict[str, Any] | None:
@@ -397,13 +487,15 @@ class AssistantOrchestrator:
             return None
         query, extensions = _content_query_and_extensions(normalized)
         result = self.registry.run("file_content_search", query=query, extensions=extensions)
+        planned_actions = ActionPlanner().create_actions_from_file_search(result)
         return {
             "mode": "rule_based",
             "tool": "file_content_search",
             "executed_tool": "file_content_search",
-            "answer": _format_file_content_answer(result),
+            "answer": _append_pending_actions(_format_file_content_answer(result), planned_actions),
             "risk": ActionRisk.GREEN,
             "result": result,
+            "pending_actions": planned_actions,
         }
 
     def _handle_file_result_action(self, normalized: str) -> dict[str, Any] | None:
@@ -562,9 +654,9 @@ def _is_file_content_search_intent(message: str) -> bool:
             "finde dateien in denen",
             "suche kaufvertrag in pdfs",
             "welche datei enthaelt",
-            "welche datei enthält",
+            "welche datei enthÃ¤lt",
             "welche pdf enthaelt",
-            "welche pdf enthält",
+            "welche pdf enthÃ¤lt",
             "suche in dokumenten nach",
             "suche in pdfs nach",
         )
@@ -576,11 +668,11 @@ def _is_open_best_match_intent(message: str) -> bool:
         term in message
         for term in (
             "oeffne den besten treffer",
-            "öffne den besten treffer",
+            "Ã¶ffne den besten treffer",
             "oeffne die erste datei",
-            "öffne die erste datei",
+            "Ã¶ffne die erste datei",
             "oeffne treffer",
-            "öffne treffer",
+            "Ã¶ffne treffer",
         )
     )
 
@@ -621,6 +713,11 @@ def _is_onedrive_file_intent(message: str) -> bool:
 
 
 def _is_file_open_latest_intent(message: str) -> bool:
+    folded = _fold_german_text(message)
+    if "letzte" in folded and "datei" in folded and any(
+        verb in folded for verb in ("offne", "oeffne", "open")
+    ):
+        return True
     return any(
         term in message
         for term in (
@@ -629,12 +726,25 @@ def _is_file_open_latest_intent(message: str) -> bool:
             "oeffne die letzte erstellte datei",
             "oeffne letzte erstellte datei",
             "oeffne die letzte excel",
-            "öffne letzte datei",
-            "öffne die letzte datei",
-            "öffne die letzte erstellte datei",
-            "öffne letzte erstellte datei",
-            "öffne die letzte excel",
+            "Ã¶ffne letzte datei",
+            "Ã¶ffne die letzte datei",
+            "Ã¶ffne die letzte erstellte datei",
+            "Ã¶ffne letzte erstellte datei",
+            "Ã¶ffne die letzte excel",
         )
+    )
+
+
+def _fold_german_text(message: str) -> str:
+    return (
+        message.lower()
+        .replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
+        .replace("Ã¤", "ae")
+        .replace("Ã¶", "oe")
+        .replace("Ã¼", "ue")
     )
 
 
@@ -646,10 +756,10 @@ def _is_file_open_intent(message: str) -> bool:
             "oeffne datei",
             "oeffne ausgaben",
             "oeffne die erstellte datei",
-            "öffne die datei",
-            "öffne datei",
-            "öffne ausgaben",
-            "öffne die erstellte datei",
+            "Ã¶ffne die datei",
+            "Ã¶ffne datei",
+            "Ã¶ffne ausgaben",
+            "Ã¶ffne die erstellte datei",
         )
     )
 
@@ -695,9 +805,9 @@ def _file_query_and_extension(message: str) -> tuple[str, list[str] | None]:
         "oeffne die datei",
         "oeffne datei",
         "oeffne",
-        "öffne die datei",
-        "öffne datei",
-        "öffne",
+        "Ã¶ffne die datei",
+        "Ã¶ffne datei",
+        "Ã¶ffne",
         "meinen",
         "meine",
         "die",
@@ -765,9 +875,9 @@ def _content_query_and_extensions(message: str) -> tuple[str, list[str] | None]:
         "finde dateien in denen",
         "suche kaufvertrag in pdfs",
         "welche datei enthaelt",
-        "welche datei enthält",
+        "welche datei enthÃ¤lt",
         "welche pdf enthaelt",
-        "welche pdf enthält",
+        "welche pdf enthÃ¤lt",
         "suche in dokumenten nach",
         "suche in pdfs nach",
         "steht",
@@ -823,7 +933,7 @@ def _is_web_research_intent(message: str) -> bool:
             "suche online",
             "finde offizielle dokumentation",
             "pruefe im internet",
-            "prüfe im internet",
+            "prÃ¼fe im internet",
             "aktuelle informationen",
             "websuche",
         )
@@ -841,7 +951,7 @@ def _web_research_query(original: str, normalized: str) -> str:
         "suche online nach",
         "finde offizielle Dokumentation zu",
         "finde offizielle dokumentation zu",
-        "prüfe im Internet",
+        "prÃ¼fe im Internet",
         "pruefe im internet",
         "websuche",
     ):
@@ -909,6 +1019,237 @@ def _file_template_for_message(message: str) -> dict[str, Any] | None:
     return None
 
 
+def _skill_route(original: str, normalized: str) -> tuple[str | None, dict[str, Any]]:
+    if _is_web_research_excel_skill_intent(normalized):
+        return "web_research_excel", {"query": _web_research_query(original, normalized)}
+    if _is_web_research_report_skill_intent(normalized):
+        return "web_research_report", {"query": _web_research_query(original, normalized)}
+    if _is_document_index_excel_skill_intent(normalized):
+        query, extensions = _file_query_and_extension(normalized)
+        return "document_index_excel", {"query": query, "extensions": extensions or [".pdf"]}
+    if _is_file_search_report_skill_intent(normalized):
+        query, extensions = _content_query_and_extensions(normalized)
+        return "file_search_report", {"query": query, "extensions": extensions, "content_search": _is_file_content_search_intent(normalized)}
+    if _is_document_summarize_skill_intent(normalized):
+        return "document_summarize", {"path": _best_result_path(), "focus": "Kaufvertrag" if "kaufvertrag" in normalized else None}
+    if _is_document_extract_skill_intent(normalized):
+        return "document_extract_key_fields", {"path": _best_result_path(), "document_type": "kaufvertrag" if "kaufvertrag" in normalized else "unknown"}
+    return None, {}
+
+
+def _best_result_path() -> str:
+    from app.assistant.session_state import session_state
+
+    best = session_state.get_best_file_result()
+    return str(best.get("path", "")) if best else ""
+
+
+def _is_web_research_excel_skill_intent(message: str) -> bool:
+    return _is_web_research_intent(message) and any(term in message for term in ("excel", "xlsx", "quellenliste"))
+
+
+def _is_web_research_report_skill_intent(message: str) -> bool:
+    return _is_web_research_intent(message) and any(term in message for term in ("bericht", "markdown", "quellenuebersicht", "quellenÃ¼bersicht"))
+
+
+def _is_document_index_excel_skill_intent(message: str) -> bool:
+    if not any(term in message for term in ("excel", "xlsx", "uebersicht", "Ã¼bersicht", "liste", "index")):
+        return False
+    return any(term in message for term in ("dokument", "dokumente", "pdf", "pdfs", "suchergebnisse", "ergebnisse", "hauskauf"))
+
+
+def _is_file_search_report_skill_intent(message: str) -> bool:
+    return any(term in message for term in ("suchbericht", "bericht ueber", "bericht Ã¼ber", "dokumentiere die gefundenen"))
+
+
+def _is_document_summarize_skill_intent(message: str) -> bool:
+    return any(term in message for term in ("fasse diese datei zusammen", "fasse den besten treffer zusammen", "fasse den kaufvertrag zusammen", "was steht in treffer"))
+
+
+def _is_document_extract_skill_intent(message: str) -> bool:
+    return any(term in message for term in ("extrahiere die wichtigsten daten", "welche eckdaten", "kerndaten", "eckdaten stehen"))
+
+
+def _format_skill_answer(skill_name: str, result: dict[str, Any]) -> str:
+    if result.get("blocked"):
+        return str(result.get("message", "Aktion wurde aus Sicherheitsgruenden blockiert."))
+    if skill_name == "document_summarize":
+        return str(result.get("summary", "Keine Zusammenfassung verfuegbar."))
+    if skill_name == "document_extract_key_fields":
+        lines = ["Gefundene Eckdaten:"]
+        for key, value in result.get("fields", {}).items():
+            lines.append(f"- {key}: {value.get('value', 'nicht gefunden')}")
+        return "\n".join(lines)
+    if skill_name in {"file_search_report", "web_research_report"}:
+        return f"{result.get('message', 'Bericht wurde erstellt.')}\n{result.get('path', '')}".strip()
+    if skill_name in {"document_index_excel", "web_research_excel"}:
+        return f"{result.get('message', 'Excel-Datei wurde erstellt.')}\n{result.get('path', '')}".strip()
+    return str(result.get("message", "Skill wurde ausgefuehrt."))
+
+
+def _is_pending_actions_query(message: str) -> bool:
+    return any(term in message for term in ("was schlaegst du vor", "was schlÃ¤gst du vor", "welche aktionen stehen aus", "zeige aktionen"))
+
+
+def _is_action_execute_intent(message: str) -> bool:
+    if _leading_action_index(message) is not None:
+        return True
+    if "aktion" in message and any(
+        term in message
+        for term in ("fuehre", "führe", "fÃ¼hre", "aus", "bestaetige", "bestätige", "bestÃ¤tige", "confirm", "best")
+    ):
+        return True
+    if any(term in _fold_german_text(message) for term in ("ausfuehren", "fuehre", "bestatige", "bestaetige")):
+        return True
+    return False
+
+
+def _is_action_confirm_intent(message: str) -> bool:
+    folded = _fold_german_text(message)
+    return any(
+        term in message
+        for term in ("bestaetige", "bestätige", "bestÃ¤tige", "confirm", "mit bestaetigung", "mit bestätigung", "mit bestÃ¤tigung", "best")
+    ) or any(term in folded for term in ("bestaetige", "bestatige", "confirm"))
+
+
+def _is_action_reject_intent(message: str) -> bool:
+    return any(term in message for term in ("aktion", "vorschlag")) and any(term in message for term in ("ablehnen", "verwerfen", "reject"))
+
+
+def _action_index(message: str) -> int | None:
+    match = re.search(r"aktion\s+(\d+)", message)
+    if not match:
+        match = re.search(r"vorschlag\s+(\d+)", message)
+    if not match:
+        return _leading_action_index(message)
+    return int(match.group(1))
+
+
+def _leading_action_index(message: str) -> int | None:
+    match = re.match(r"^\s*(\d+)\.?\b", message)
+    return int(match.group(1)) if match else None
+
+
+def _pending_action_from_message(message: str) -> dict[str, Any] | None:
+    index = _action_index(message)
+    if index is not None:
+        return _pending_action_by_index(index)
+    normalized_message = _normalize_action_reference(message)
+    if not normalized_message:
+        return None
+    for action in pending_action_store.list_pending_actions():
+        title = _normalize_action_reference(str(action.get("title") or ""))
+        if title and (title in normalized_message or normalized_message in title):
+            return action
+    return None
+
+
+def _is_action_reference(message: str) -> bool:
+    return _pending_action_from_message(message) is not None
+
+
+def _normalize_action_reference(value: str) -> str:
+    folded = _fold_german_text(value)
+    folded = re.sub(r"^\s*\d+\.?\s*", "", folded)
+    folded = re.sub(r"\[(green|gruen|grun|yellow|gelb|red|rot)\]", " ", folded)
+    folded = re.sub(r"\b(aktion|fuehre|fuehr|ausfuehren|ausfuehre|aus|bestatige|bestaetige|confirm)\b", " ", folded)
+    folded = re.sub(r"[^a-z0-9 ]+", " ", folded)
+    return re.sub(r"\s+", " ", folded).strip()
+
+
+def _pending_action_by_index(index: int) -> dict[str, Any] | None:
+    actions = pending_action_store.list_pending_actions()
+    if index < 1 or index > len(actions):
+        return None
+    return actions[index - 1]
+
+
+def _action_not_found_response() -> dict[str, Any]:
+    return {
+        "mode": "rule_based",
+        "tool": "action_execute",
+        "answer": "Diese Aktion ist nicht mehr ausstehend oder wurde nicht gefunden.",
+        "risk": ActionRisk.GREEN,
+        "result": {"error": True},
+    }
+
+
+def _append_pending_actions(answer: str, actions: list[dict[str, Any]]) -> str:
+    if not actions:
+        return answer
+    return "\n\n".join([answer, _format_pending_actions(actions), "Sag: 'Führe Aktion 1 aus.'"])
+
+
+def _format_pending_actions(actions: list[dict[str, Any]]) -> str:
+    if not actions:
+        return "Es stehen aktuell keine Aktionen aus."
+    lines = ["Mögliche nächste Aktionen:"]
+    for index, action in enumerate(actions[:3], start=1):
+        lines.append(f"{index}. [{_risk_label(str(action.get('risk', 'GREEN')))}] {action.get('title')}")
+    return "\n".join(lines)
+
+
+def _format_action_execution_answer(result: dict[str, Any]) -> str:
+    if result.get("confirmation_required"):
+        return "Diese Aktion benötigt eine Bestätigung. Sag: 'Bestätige Aktion 1', wenn ich fortfahren soll."
+    if result.get("status") == "executed":
+        title = result.get("action", {}).get("title", "Aktion")
+        tool_result = _executed_tool_result(result)
+        if isinstance(tool_result, dict) and tool_result.get("recommendations"):
+            lines = [
+                f"Ausgeführt: {title}",
+                "",
+                str(tool_result.get("headline") or ""),
+                "",
+                "Empfohlene sichere Maßnahmen:",
+            ]
+            for index, recommendation in enumerate(tool_result.get("recommendations", []), start=1):
+                lines.append(f"{index}. {recommendation}")
+            lines.extend(["", "Ich habe nichts automatisch geschaltet."])
+            if result.get("action", {}).get("risk") == "YELLOW":
+                lines.extend(["", "Diese Aktion wurde erst nach deiner Bestätigung ausgeführt."])
+            return "\n".join(line for line in lines if line is not None).strip()
+        if isinstance(tool_result, dict) and tool_result.get("created") and tool_result.get("path"):
+            message = str(tool_result.get("message") or "Datei wurde erstellt.").rstrip(".")
+            if tool_result.get("status"):
+                lines = [
+                    f"{message}:",
+                    str(tool_result.get("path")),
+                    "",
+                    f"Status: {tool_result.get('status')}",
+                ]
+                if tool_result.get("reason"):
+                    lines.append(f"Grund: {tool_result.get('reason')}.")
+                if tool_result.get("next_action"):
+                    lines.append(f"Nächster Schritt: {tool_result.get('next_action')}")
+                lines.append("Ich habe nichts automatisch geschaltet.")
+                return "\n".join(lines)
+            summary = str(tool_result.get("summary") or "").strip()
+            if summary:
+                return f"{message}:\n{tool_result.get('path')}\n\n{summary}"
+            return f"{message}:\n{tool_result.get('path')}"
+        return f"Ausgeführt: {title}"
+    if result.get("status") == "blocked":
+        return "Diese Aktion wurde blockiert."
+    if result.get("status") == "expired":
+        return "Diese Aktion ist abgelaufen."
+    return str(result.get("message", "Aktion wurde verarbeitet."))
+
+
+def _executed_tool_result(result: dict[str, Any]) -> dict[str, Any] | None:
+    executed = result.get("result")
+    if not isinstance(executed, dict):
+        return None
+    tool_result = executed.get("result")
+    return tool_result if isinstance(tool_result, dict) else executed
+def _risk_label(risk: str) -> str:
+    return {
+        "GREEN": "GRÜN",
+        "YELLOW": "GELB",
+        "RED": "ROT",
+    }.get(risk.upper(), risk.upper())
+
+
 def _known_tool_route(
     original_message: str,
     normalized_message: str,
@@ -935,7 +1276,7 @@ def _is_home_assistant_problem_intent(message: str) -> bool:
         "home assistant diagnose",
         "welche geraete haben probleme",
         "welche gerate haben probleme",
-        "geräte probleme",
+        "gerÃ¤te probleme",
         "geraete probleme",
         "gerate probleme",
         "smart home status",
@@ -1056,7 +1397,7 @@ def _format_timetree_today_answer(result: dict[str, Any]) -> str:
         return "Heute stehen keine TimeTree-Termine in der lokalen ICS-Datei."
     lines = [f"Heute stehen {len(events)} TimeTree-Termine an:"]
     for index, event in enumerate(events, start=1):
-        prefix = "Ganztägig" if event.get("all_day") else _format_event_time(event)
+        prefix = "GanztÃ¤gig" if event.get("all_day") else _format_event_time(event)
         lines.append(f"{index}. {prefix} {event.get('title', '')}".strip())
     return "\n".join(lines)
 
@@ -1106,6 +1447,27 @@ def _contains_realtime_denial(answer: str) -> bool:
             "nicht abrufen",
             "kann aktuell keine",
         )
+    )
+
+
+def _contains_fake_placeholder(answer: str) -> bool:
+    return any(
+        placeholder in answer
+        for placeholder in (
+            "[Wert aus Tool]",
+            "[falls verknüpft]",
+            "[falls verknuepft]",
+            "[Aktuelle Gerätestatus]",
+            "[Aktuelle Geraetestatus]",
+        )
+    )
+
+
+def _placeholder_guard_answer() -> str:
+    return (
+        "Ich erstelle keine Diagnoseberichte mit Platzhaltern. "
+        "Nutze die ausstehende Aktion 'Diagnosebericht erstellen', damit ich reale Home-Assistant- "
+        "und EcoFlow-Daten abrufe und lokal als Markdown-Datei speichere."
     )
 
 
@@ -1181,7 +1543,7 @@ def _priority_label(priority: str) -> str:
 
 
 def _handle_watcher_command(normalized: str) -> dict[str, Any] | None:
-    if any(term in normalized for term in ("pruefe alles", "prüfe alles", "starte ueberwachung", "starte überwachung")):
+    if any(term in normalized for term in ("pruefe alles", "prÃ¼fe alles", "starte ueberwachung", "starte Ã¼berwachung")):
         result = WatcherController().run_once()
         return {
             "mode": "rule_based",
@@ -1210,4 +1572,7 @@ def _handle_watcher_command(normalized: str) -> dict[str, Any] | None:
 
 
 def _format_event_time(event: dict[str, Any]) -> str:
-    return event["start"][11:16] if "T" in event.get("start", "") else "Ganztägig"
+    return event["start"][11:16] if "T" in event.get("start", "") else "GanztÃ¤gig"
+
+
+

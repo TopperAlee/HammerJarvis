@@ -25,6 +25,19 @@ def test_dashboard_returns_html() -> None:
     assert "Hammer Jarvis" in response.text
 
 
+def test_dashboard_hud_static_assets_are_present() -> None:
+    html_response = client.get("/dashboard")
+    css_response = client.get("/static/dashboard.css")
+    js_response = client.get("/static/dashboard.js")
+
+    assert html_response.status_code == 200
+    assert css_response.status_code == 200
+    assert js_response.status_code == 200
+    assert "HAMMER JARVIS HUD DASHBOARD v2" in html_response.text
+    assert ".jarvis-core" in css_response.text
+    assert "initDashboard" in js_response.text
+
+
 def test_chat_fallback() -> None:
     response = client.post("/chat", json={"message": "Was kannst du heute tun?"})
 

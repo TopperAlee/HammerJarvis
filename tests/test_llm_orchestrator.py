@@ -325,6 +325,23 @@ def test_assistant_chat_identity_returns_hammer_jarvis(monkeypatch) -> None:
     assert "Alibaba" not in result["answer"]
 
 
+def test_llm_placeholder_report_answer_is_rejected() -> None:
+    class FakeLLMClient:
+        def is_available(self) -> bool:
+            return True
+
+        def create_response_with_tools(self, messages, tools):
+            return {
+                "text": "Diagnosebericht: [Wert aus Tool] [falls verknüpft] [Aktuelle Gerätestatus]",
+                "tool_calls": [],
+            }
+
+    result = AssistantOrchestrator(llm_client=FakeLLMClient()).handle_message("Erstelle einen Diagnosebericht")
+
+    assert "Platzhaltern" in result["answer"]
+    assert "[Wert aus Tool]" not in result["answer"]
+
+
 def test_sanitize_identity_response_corrects_base_model_identity() -> None:
     result = sanitize_identity_response(
         "Wer bist du?",

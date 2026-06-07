@@ -49,6 +49,8 @@ function bindElements() {
     "webResearchAnswer",
     "webResearchSources",
     "watcherCounts",
+    "refreshActions",
+    "pendingActions",
     "runWatchers",
     "refreshWatchers",
     "watcherAlerts",
@@ -223,6 +225,75 @@ function renderWebSource(source) {
   const wrapper = document.createElement("span");
   wrapper.textContent = source.title || source.source || "Quelle";
   appendCode(wrapper, source.url);
+  return wrapper;
+}
+
+function riskLabel(risk) {
+  const labels = {
+    GREEN: "GRÜN",
+    YELLOW: "GELB",
+    RED: "ROT",
+  };
+  return labels[String(risk || "GREEN").toUpperCase()] || String(risk || "GREEN").toUpperCase();
+}
+
+function renderPendingAction(action) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "action-card";
+  const header = document.createElement("div");
+  header.className = "action-row";
+  const badge = document.createElement("span");
+  const risk = String(action.risk || "GREEN").toLowerCase();
+  badge.className = `risk-badge risk-${risk}`;
+  badge.textContent = riskLabel(action.risk || "GREEN");
+  const title = document.createElement("strong");
+  title.textContent = action.title || "Aktion";
+  header.append(badge, title);
+
+  const description = document.createElement("div");
+  description.className = "muted";
+  description.textContent = action.description || "";
+
+  const controls = document.createElement("div");
+  controls.className = "action-row";
+  if (action.risk !== "RED") {
+    const executeButton = document.createElement("button");
+    executeButton.className = "ghost-button";
+    executeButton.type = "button";
+    executeButton.textContent = action.risk === "YELLOW" ? "Bestätigen & ausführen" : "Ausführen";
+    executeButton.textContent = action.risk === "YELLOW" ? "Bestätigen & ausführen" : "Ausführen";
+    executeButton.addEventListener("click", async () => {
+      const confirm = action.risk === "YELLOW";
+      try {
+        const response = await postJson(`/assistant/actions/${action.id}/execute`, { confirm });
+        setText("jarvisAnswer", response.message || response.status || "Aktion verarbeitet.");
+        await refreshActions();
+      } catch (error) {
+        setText("jarvisAnswer", "Aktion konnte nicht ausgeführt werden.");
+      }
+    });
+    controls.appendChild(executeButton);
+  }
+  const rejectButton = document.createElement("button");
+  rejectButton.className = "ghost-button";
+  rejectButton.type = "button";
+  rejectButton.textContent = "Ablehnen";
+  rejectButton.addEventListener("click", async () => {
+    try {
+      await postJson(`/assistant/actions/${action.id}/reject`, {});
+      await refreshActions();
+    } catch (error) {
+      setText("jarvisAnswer", "Aktion konnte nicht abgelehnt werden.");
+    }
+  });
+  controls.appendChild(rejectButton);
+  wrapper.append(header, description, controls);
+  if (action.risk === "YELLOW") {
+    const warning = document.createElement("div");
+    warning.className = "muted";
+    warning.textContent = "Diese Aktion erfordert ausdrückliche Bestätigung.";
+    wrapper.appendChild(warning);
+  }
   return wrapper;
 }
 
@@ -413,6 +484,15 @@ async function refreshAlerts() {
   renderList(elements.watcherAlerts, alerts.slice(0, 7), renderWatcherAlert);
 }
 
+async function refreshActions() {
+  try {
+    const data = await fetchJson("/assistant/actions/pending");
+    renderList(elements.pendingActions, data.actions || [], renderPendingAction, "Keine ausstehenden Aktionen.");
+  } catch (error) {
+    renderList(elements.pendingActions, [], renderPendingAction, "Aktionen konnten nicht geladen werden.");
+  }
+}
+
 async function refreshRecentFiles() {
   let filesData;
   try {
@@ -509,6 +589,7 @@ async function refreshDashboard() {
       refreshRecentFiles(),
       refreshEmail(),
       refreshTimeTree(),
+      refreshActions(),
     ]);
   } catch (error) {
     elements.errorPanel.hidden = false;
@@ -568,6 +649,7 @@ function wireEvents() {
     }
   });
   elements.refreshWatchers.addEventListener("click", refreshAlerts);
+  elements.refreshActions.addEventListener("click", refreshActions);
   elements.runWatchers.addEventListener("click", async () => {
     try {
       await postJson("/assistant/watchers/run", {});

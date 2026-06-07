@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 from app.assistant.formatters.ecoflow_formatter import format_ecoflow_energy_answer
@@ -9,6 +10,9 @@ def format_daily_briefing(results: dict[str, Any]) -> str:
     engine = PriorityEngine()
     priorities = engine.build_daily_priorities(results)
     lines = ["Tagesstatus"]
+    low_battery_warning = _low_battery_warning_line(results.get("ecoflow_energy_overview", {}))
+    if low_battery_warning:
+        lines.extend(["", low_battery_warning])
     alert_lines = _watcher_alert_lines(results.get("watcher_alerts", {}))
     if alert_lines:
         lines.append("")
@@ -42,6 +46,9 @@ def format_daily_briefing(results: dict[str, Any]) -> str:
 
 def format_home_check(results: dict[str, Any]) -> str:
     lines = ["Hauscheck", ""]
+    low_battery_warning = _low_battery_warning_line(results.get("ecoflow_energy_overview", {}))
+    if low_battery_warning:
+        lines.extend([low_battery_warning, ""])
     lines.extend(_home_assistant_lines(results.get("home_assistant_get_problems", {}), "Home Assistant"))
     lines.append("")
     lines.append("EcoFlow")
@@ -245,6 +252,25 @@ def _has_stale_ecoflow_values(ecoflow: Any) -> bool:
         isinstance(warning, dict) and warning.get("code") == "stale_value"
         for warning in ecoflow.get("warnings", [])
     )
+
+
+def _low_battery_warning_line(ecoflow: Any) -> str | None:
+    if not isinstance(ecoflow, dict):
+        return None
+    try:
+        soc = float(ecoflow.get("soc_percent"))
+    except (TypeError, ValueError):
+        return None
+    if soc > _low_battery_threshold():
+        return None
+    return f"Warnung: EcoFlow-Batterie ist niedrig: {int(round(soc))} %."
+
+
+def _low_battery_threshold() -> float:
+    try:
+        return float(os.getenv("ECOFLOW_LOW_BATTERY_THRESHOLD_PERCENT", "20"))
+    except ValueError:
+        return 20.0
 
 
 def _has_backup_warning(ha: dict[str, Any]) -> bool:

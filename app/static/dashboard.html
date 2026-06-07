@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="de">
   <head>
-    <meta charset="utf-8">
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
     <link rel="stylesheet" href="/static/dashboard.css?v=jarvis-hud-1">
@@ -26,6 +26,7 @@
           <a href="#files">▣ Dateien</a>
           <a href="#research">⌕ Recherche</a>
           <a href="#alerts">△ Alerts</a>
+          <a href="#actions">✓ Aktionen</a>
           <a href="#chat">● Chat</a>
         </nav>
         <div class="sidebar-stats">
@@ -181,6 +182,30 @@
             <div id="watcherCounts" class="counts">Aktive Hinweise: -</div>
             <button id="refreshWatchers" class="ghost-button small-action" type="button">Hinweise aktualisieren</button>
             <ul id="watcherAlerts" class="signal-list compact"></ul>
+          </section>
+
+          <section id="skills" class="hud-panel skills-panel">
+            <div class="panel-heading">
+              <span>Skills</span>
+              <button class="ghost-button quick-command" type="button" data-command="Fasse den besten Treffer zusammen">Datei zusammenfassen</button>
+            </div>
+            <div class="quick-row">
+              <button class="quick-command" type="button" data-command="Extrahiere die wichtigsten Daten aus dem Kaufvertrag">Eckdaten extrahieren</button>
+              <button class="quick-command" type="button" data-command="Erstelle einen Suchbericht zu Kaufvertrag">Suchbericht erstellen</button>
+              <button class="quick-command" type="button" data-command="Erstelle eine Excel-Übersicht der Hauskauf-Dokumente">Excel-Dokumentenindex</button>
+              <button class="quick-command" type="button" data-command="Recherchiere Microsoft Graph Search und erstelle mir einen Bericht">Webbericht</button>
+              <button class="quick-command" type="button" data-command="Recherchiere Microsoft Graph Search und erstelle eine Excel mit Quellen">Webquellen als Excel</button>
+            </div>
+            <p class="muted">Skills kombinieren lokale Suche, Recherche und Exportwerkzeuge sicher über den Assistant.</p>
+          </section>
+
+          <section id="actions" class="hud-panel actions-panel">
+            <div class="panel-heading">
+              <span>Aktionen</span>
+              <button id="refreshActions" class="ghost-button" type="button">Aktualisieren</button>
+            </div>
+            <p class="muted">Grüne Aktionen laufen direkt. Gelbe Aktionen brauchen Bestätigung. Rote Aktionen bleiben blockiert.</p>
+            <ul id="pendingActions" class="signal-list compact"></ul>
           </section>
 
           <section id="chat" class="hud-panel chat-panel">

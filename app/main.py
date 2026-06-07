@@ -10,10 +10,13 @@ from pydantic import BaseModel, Field
 
 from app.agent.core import HammerJarvisCore
 from app.agent.permissions import classify_action
+from app.assistant.actions.action_executor import ActionExecutor
+from app.assistant.actions.pending_action_store import pending_action_store
 from app.assistant.orchestrator import AssistantOrchestrator
 from app.assistant.llm_client import LLMClient, sanitize_identity_response
 from app.assistant.missions import MissionController, get_mission_definitions
 from app.assistant.priority_engine import PriorityEngine
+from app.assistant.skills.skill_registry import SkillRegistry
 from app.assistant.system_prompt import SYSTEM_PROMPT
 from app.assistant.session_state import open_best_match, open_result_by_index, session_state
 from app.config.personal_priority_rules import (
@@ -77,6 +80,10 @@ class ChatRequest(BaseModel):
 
 class AssistantChatRequest(BaseModel):
     message: str = Field(min_length=1)
+    confirm: bool = False
+
+
+class ActionExecuteRequest(BaseModel):
     confirm: bool = False
 
 
@@ -160,6 +167,31 @@ class WebResearchRequest(BaseModel):
     query: str = Field(min_length=1)
 
 
+class SkillDocumentSummarizeRequest(BaseModel):
+    path: str = Field(min_length=1)
+    focus: str | None = None
+
+
+class SkillDocumentKeyFieldsRequest(BaseModel):
+    path: str = Field(min_length=1)
+    document_type: str | None = None
+
+
+class SkillFileSearchReportRequest(BaseModel):
+    query: str = Field(min_length=1)
+    extensions: list[str] | None = None
+    content_search: bool = False
+
+
+class SkillDocumentIndexExcelRequest(BaseModel):
+    query: str = Field(min_length=1)
+    extensions: list[str] | None = None
+
+
+class SkillWebResearchRequest(BaseModel):
+    query: str = Field(min_length=1)
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {
@@ -192,6 +224,28 @@ def assistant_chat(request: AssistantChatRequest) -> dict[str, Any]:
         )
     except Exception as exc:
         raise _to_http_exception(exc) from exc
+
+
+@app.get("/assistant/actions/pending")
+def assistant_actions_pending() -> dict[str, Any]:
+    actions = pending_action_store.list_pending_actions()
+    return {"count": len(actions), "actions": actions}
+
+
+@app.post("/assistant/actions/{action_id}/execute")
+def assistant_action_execute(action_id: str, request: ActionExecuteRequest) -> dict[str, Any]:
+    return ActionExecutor().execute(action_id, confirm=request.confirm)
+
+
+@app.post("/assistant/actions/{action_id}/reject")
+def assistant_action_reject(action_id: str) -> dict[str, Any]:
+    return pending_action_store.reject_action(action_id)
+
+
+@app.delete("/assistant/actions/expired")
+def assistant_actions_expire() -> dict[str, Any]:
+    expired = pending_action_store.expire_old_actions()
+    return {"expired_count": len(expired), "expired": expired}
 
 
 @app.get("/assistant/missions")
@@ -382,6 +436,57 @@ def assistant_web_search(q: str = Query(min_length=1)) -> dict[str, Any]:
 @app.post("/assistant/web/research")
 def assistant_web_research(request: WebResearchRequest) -> dict[str, Any]:
     return WebResearchTool().research(request.query)
+
+
+@app.get("/assistant/skills")
+def assistant_skills() -> dict[str, Any]:
+    return SkillRegistry().list_skills()
+
+
+@app.post("/assistant/skills/document/summarize")
+def assistant_skill_document_summarize(request: SkillDocumentSummarizeRequest) -> dict[str, Any]:
+    return SkillRegistry().execute(
+        "document_summarize",
+        {"path": request.path, "focus": request.focus},
+    )
+
+
+@app.post("/assistant/skills/document/extract-key-fields")
+def assistant_skill_document_extract_key_fields(request: SkillDocumentKeyFieldsRequest) -> dict[str, Any]:
+    return SkillRegistry().execute(
+        "document_extract_key_fields",
+        {"path": request.path, "document_type": request.document_type},
+    )
+
+
+@app.post("/assistant/skills/files/search-report")
+def assistant_skill_file_search_report(request: SkillFileSearchReportRequest) -> dict[str, Any]:
+    return SkillRegistry().execute(
+        "file_search_report",
+        {
+            "query": request.query,
+            "extensions": request.extensions,
+            "content_search": request.content_search,
+        },
+    )
+
+
+@app.post("/assistant/skills/files/index-excel")
+def assistant_skill_document_index_excel(request: SkillDocumentIndexExcelRequest) -> dict[str, Any]:
+    return SkillRegistry().execute(
+        "document_index_excel",
+        {"query": request.query, "extensions": request.extensions},
+    )
+
+
+@app.post("/assistant/skills/web/report")
+def assistant_skill_web_report(request: SkillWebResearchRequest) -> dict[str, Any]:
+    return SkillRegistry().execute("web_research_report", {"query": request.query})
+
+
+@app.post("/assistant/skills/web/excel")
+def assistant_skill_web_excel(request: SkillWebResearchRequest) -> dict[str, Any]:
+    return SkillRegistry().execute("web_research_excel", {"query": request.query})
 
 
 @app.get("/assistant/llm/status")

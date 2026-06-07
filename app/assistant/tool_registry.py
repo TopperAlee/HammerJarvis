@@ -1,4 +1,7 @@
-from typing import Any
+﻿from typing import Any
+
+import os
+from datetime import datetime
 
 from app.agent.permissions import ActionRisk
 from app.assistant.schemas import RegisteredTool
@@ -281,6 +284,14 @@ class ToolRegistry:
             False,
         )
         self.register(
+            "hauscheck_diagnostic_report",
+            "Erstellt einen lokalen Diagnosebericht aus aktuellen Home-Assistant- und EcoFlow-Daten.",
+            ActionRisk.GREEN,
+            self._hauscheck_diagnostic_report,
+            {},
+            False,
+        )
+        self.register(
             "file_search",
             "Sucht lokale Dateien in erlaubten Verzeichnissen.",
             ActionRisk.GREEN,
@@ -385,6 +396,14 @@ class ToolRegistry:
             False,
         )
         self.register(
+            "energy_saving_recommendations",
+            "Gibt sichere Energiesparvorschlaege aus, ohne Geraete zu schalten.",
+            ActionRisk.YELLOW,
+            self._energy_saving_recommendations,
+            {"soc_percent": "number", "source": "string"},
+            True,
+        )
+        self.register(
             "general_local_status",
             "Kompakter lokaler Integrationsstatus.",
             ActionRisk.GREEN,
@@ -423,3 +442,396 @@ class ToolRegistry:
                 "Local Ollama LLM",
             ],
         }
+
+    def _hauscheck_diagnostic_report(self) -> dict[str, Any]:
+        """GREEN/read-only report generation: only reads tools and writes a local export file."""
+        ha_result = self.execute_tool("home_assistant_get_problems", {}, confirm=False).get("result", {})
+        ecoflow_result = self.execute_tool("ecoflow_energy_overview", {}, confirm=False).get("result", {})
+        assessment = _diagnostic_assessment(ha_result, ecoflow_result)
+        content = _hauscheck_diagnostic_report_content(ha_result, ecoflow_result, assessment)
+        created = self.run(
+            "file_create_markdown",
+            title="Hammer Jarvis Diagnosebericht",
+            content=content,
+            filename="hauscheck_diagnose.md",
+        )
+        return {
+            **created,
+            "message": "Diagnosebericht wurde erstellt.",
+            "status": assessment["status"],
+            "reason": assessment["primary_reason"],
+            "next_action": assessment["next_steps"][0] if assessment["next_steps"] else "Keine direkte Aktion erforderlich.",
+            "summary": _hauscheck_diagnostic_summary(ha_result, ecoflow_result, assessment),
+            "home_assistant": ha_result,
+            "ecoflow": ecoflow_result,
+        }
+
+    def _energy_saving_recommendations(
+        self,
+        soc_percent: float | int | None = None,
+        source: str = "ecoflow",
+    ) -> dict[str, Any]:
+        """Return advisory-only energy recommendations; this tool never switches devices."""
+        rounded_soc = int(round(float(soc_percent))) if soc_percent is not None else None
+        return {
+            "tool": "energy_saving_recommendations",
+            "risk": ActionRisk.YELLOW,
+            "executed": True,
+            "source": source,
+            "soc_percent": soc_percent,
+            "no_automatic_switching": True,
+            "switching_performed": False,
+            "headline": (
+                f"EcoFlow-Batterie kritisch niedrig: {rounded_soc} %"
+                if rounded_soc is not None
+                else "EcoFlow-Batterie kritisch niedrig"
+            ),
+            "recommendations": [
+                "Starke Verbraucher vorerst vermeiden.",
+                "Waschmaschine, Trockner, Heizgeräte und andere Großverbraucher nicht starten.",
+                "Prüfen, ob EcoFlow aktiv geladen werden kann.",
+                "PV-Erzeugung abwarten, falls tagsüber Sonne erwartet wird.",
+                "EcoFlow-App oder Home Assistant prüfen, ob Entladegrenzen korrekt eingestellt sind.",
+            ],
+            "message": "Ich habe sichere Energiesparmaßnahmen vorgeschlagen und nichts automatisch geschaltet.",
+        }
+
+
+def _hauscheck_diagnostic_report_content(
+    ha_result: dict[str, Any],
+    ecoflow_result: dict[str, Any],
+    assessment: dict[str, Any],
+) -> str:
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    lines = [
+        "## Metadaten",
+        "- generated_by: Hammer Jarvis",
+        "- report_type: hauscheck_diagnose",
+        "- data_sources: Home Assistant; EcoFlow via Home Assistant",
+        "- safety_mode: read-only",
+        "",
+        f"Erstellt am: {timestamp}",
+        "",
+        "## Kurzbewertung",
+        f"Status: {assessment['status']}",
+        "",
+        "Wichtigste Punkte:",
+    ]
+    for finding in assessment["findings"]:
+        lines.append(f"- {finding}")
+    lines.extend(
+        [
+            "",
+            "## Empfohlene nächste Schritte",
+        ]
+    )
+    for index, step in enumerate(assessment["next_steps"], start=1):
+        lines.append(f"{index}. {step}")
+
+    lines.extend(
+        [
+            "",
+            "## Home Assistant",
+            (
+                f"Home Assistant: {_count(ha_result, 'critical_count')} kritisch, "
+                f"{_count(ha_result, 'warning_count')} Warnungen, "
+                f"{_count(ha_result, 'informational_count')} Infos"
+            ),
+            "",
+            "### Kritische Findings",
+        ]
+    )
+    critical = _non_ignored_items(ha_result.get("critical") or [])
+    if critical:
+        for item in critical:
+            lines.append(f"- {_entity_label(item)}")
+    else:
+        lines.append("- Keine echten kritischen Probleme.")
+
+    lines.extend(
+        [
+            "",
+            "### Warnungen",
+        ]
+    )
+    warnings = list(ha_result.get("warning") or [])
+    if warnings:
+        for item in warnings:
+            lines.append(f"- {_entity_label(item)}")
+    else:
+        lines.append("- Keine Warnungen gemeldet.")
+
+    lines.extend(
+        [
+            "",
+            "### Informational",
+        ]
+    )
+    informational = [item for item in list(ha_result.get("informational") or []) if not _is_ignored_item(item)]
+    if informational:
+        for item in informational:
+            lines.append(f"- {_entity_label(item)}")
+    else:
+        lines.append("- Keine relevanten Infos.")
+
+    lines.extend(
+        [
+            "",
+            "## EcoFlow",
+            f"Batterie: {_format_number(ecoflow_result.get('soc_percent'))} %",
+            f"PV-Leistung: {_format_number(ecoflow_result.get('pv_power_w'))} W",
+            f"LAN Smart Meter: {_format_number(ecoflow_result.get('smart_meter_w'))} W",
+            f"Netzleistung System: {_format_number(ecoflow_result.get('grid_power_w'))} W",
+            f"Batterieleistung roh: {_format_number(ecoflow_result.get('battery_power_w'))} W",
+            "Die Richtung wird nicht interpretiert.",
+            "",
+            "### EcoFlow-Hinweise",
+        ]
+    )
+    eco_warnings = _non_ignored_warnings(ecoflow_result.get("warnings") or [])
+    if eco_warnings:
+        for warning in eco_warnings:
+            lines.append(f"- {_warning_message(warning)}")
+    else:
+        lines.append("- Keine Hinweise gemeldet.")
+
+    ignored = _ignored_entities(ha_result, ecoflow_result)
+    lines.extend(["", "## Ignorierte bekannte Entities"])
+    if ignored:
+        for item in ignored:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- Keine.")
+
+    lines.extend(
+        [
+            "",
+            "## Sicherheitshinweis",
+            "Jarvis hat nichts automatisch geschaltet oder verändert.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _legacy_hauscheck_diagnostic_report_content(ha_result: dict[str, Any], ecoflow_result: dict[str, Any]) -> str:
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    lines = [
+        f"Erstellt am: {timestamp}",
+        "",
+        "## Home Assistant",
+        (
+            f"Home Assistant: {_count(ha_result, 'critical_count')} kritisch, "
+            f"{_count(ha_result, 'warning_count')} Warnungen, "
+            f"{_count(ha_result, 'informational_count')} Infos"
+        ),
+        "",
+        "### Warnungen",
+    ]
+    warnings = list(ha_result.get("warning") or [])
+    if warnings:
+        for item in warnings:
+            lines.append(f"- {_entity_label(item)}")
+    else:
+        lines.append("- Keine Warnungen gemeldet.")
+
+    critical = list(ha_result.get("critical") or [])
+    if critical:
+        lines.extend(["", "### Kritisch"])
+        for item in critical:
+            lines.append(f"- {_entity_label(item)}")
+
+    lines.extend(
+        [
+            "",
+            "## EcoFlow",
+            f"Batterie: {_format_number(ecoflow_result.get('soc_percent'))} %",
+            f"PV-Leistung: {_format_number(ecoflow_result.get('pv_power_w'))} W",
+            f"LAN Smart Meter: {_format_number(ecoflow_result.get('smart_meter_w'))} W",
+            f"Netzleistung System: {_format_number(ecoflow_result.get('grid_power_w'))} W",
+            f"Batterieleistung roh: {_format_number(ecoflow_result.get('battery_power_w'))} W",
+            "",
+            "### EcoFlow-Hinweise",
+        ]
+    )
+    eco_warnings = list(ecoflow_result.get("warnings") or [])
+    if eco_warnings:
+        for warning in eco_warnings:
+            if isinstance(warning, dict):
+                lines.append(f"- {warning.get('message') or warning.get('code') or warning}")
+            else:
+                lines.append(f"- {warning}")
+    else:
+        lines.append("- Keine Hinweise gemeldet.")
+    return "\n".join(lines)
+
+
+def _hauscheck_diagnostic_summary(
+    ha_result: dict[str, Any],
+    ecoflow_result: dict[str, Any],
+    assessment: dict[str, Any],
+) -> str:
+    critical = _count(ha_result, "critical_count")
+    warnings = _count(ha_result, "warning_count")
+    info = _count(ha_result, "informational_count")
+    soc = _format_number(ecoflow_result.get("soc_percent"))
+    pv = _format_number(ecoflow_result.get("pv_power_w"))
+    hints = "Hinweise vorhanden" if ecoflow_result.get("warnings") else "keine Hinweise"
+    critical_text = "keine echten kritischen Probleme" if critical == 0 else f"{critical} kritische Probleme"
+    return (
+        f"Status: {assessment['status']}. Grund: {assessment['primary_reason']}. "
+        f"Home Assistant: {critical_text}, {warnings} Warnungen, {info} Infos. "
+        f"EcoFlow: Batterie {soc} %, PV {pv} W, {hints}."
+    )
+
+
+def _diagnostic_assessment(ha_result: dict[str, Any], ecoflow_result: dict[str, Any]) -> dict[str, Any]:
+    """Calculate report severity from actionable facts, excluding known optional ignored entities."""
+    soc = _float_or_none(ecoflow_result.get("soc_percent"))
+    threshold = _low_battery_threshold()
+    ha_critical = _non_ignored_items(ha_result.get("critical") or [])
+    ha_warnings = list(ha_result.get("warning") or [])
+    eco_warnings = _non_ignored_warnings(ecoflow_result.get("warnings") or [])
+    stale_count = sum(1 for warning in eco_warnings if _is_stale_warning(warning))
+
+    findings: list[str] = []
+    next_steps: list[str] = []
+
+    if soc is not None and soc <= 10:
+        findings.append(f"EcoFlow-Batterie kritisch niedrig: {_format_number(soc)} %")
+        next_steps.extend(["EcoFlow-Batterie prüfen.", "Starke Verbraucher vermeiden, solange die Batterie niedrig ist."])
+    elif soc is not None and soc <= threshold:
+        findings.append(f"EcoFlow-Batterie niedrig: {_format_number(soc)} %")
+        next_steps.extend(["EcoFlow-Batterie prüfen.", "Starke Verbraucher vermeiden, solange die Batterie niedrig ist."])
+
+    if ha_critical:
+        findings.append(f"Home Assistant: {len(ha_critical)} echte kritische Probleme")
+        next_steps.append("Kritische Home-Assistant-Entities prüfen.")
+    else:
+        findings.append("Home Assistant: keine echten kritischen Probleme")
+
+    if ha_warnings:
+        backup_count = sum(1 for item in ha_warnings if "backup" in str(item).lower())
+        if backup_count:
+            findings.append(f"{len(ha_warnings)} Home-Assistant-Warnungen zu Backup-Sensoren")
+            next_steps.append("Home-Assistant-Backup-Konfiguration prüfen.")
+        else:
+            findings.append(f"{len(ha_warnings)} Home-Assistant-Warnungen")
+            next_steps.append("Home-Assistant-Warnungen prüfen.")
+
+    if stale_count >= 2:
+        findings.append("Einige EcoFlow-Tageswerte sind veraltet")
+        next_steps.append("EcoFlow-Tageswerte später erneut prüfen.")
+    elif eco_warnings:
+        findings.append("EcoFlow-Hinweise vorhanden")
+        next_steps.append("EcoFlow-Hinweise prüfen.")
+
+    # Ignored optional entities are documented separately; they must not promote severity to critical.
+    if ha_critical or (soc is not None and soc <= 10):
+        status = "KRITISCH"
+    elif (soc is not None and soc <= threshold) or ha_warnings or stale_count >= 2 or eco_warnings:
+        status = "WARNUNG"
+    else:
+        status = "OK"
+
+    if not next_steps:
+        next_steps.append("Keine direkte Aktion erforderlich.")
+    return {
+        "status": status,
+        "findings": findings,
+        "next_steps": _dedupe(next_steps),
+        "primary_reason": findings[0] if findings else "Keine relevanten Probleme erkannt",
+    }
+
+
+def _non_ignored_items(items: list[Any]) -> list[Any]:
+    return [item for item in items if not _is_ignored_item(item)]
+
+
+def _non_ignored_warnings(warnings: list[Any]) -> list[Any]:
+    return [warning for warning in warnings if not _is_ignored_warning(warning)]
+
+
+def _ignored_entities(ha_result: dict[str, Any], ecoflow_result: dict[str, Any]) -> list[str]:
+    ignored: list[str] = []
+    for item in [*(ha_result.get("critical") or []), *(ha_result.get("warning") or []), *(ha_result.get("informational") or [])]:
+        if _is_ignored_item(item):
+            ignored.append(_entity_label(item))
+    for warning in ecoflow_result.get("warnings") or []:
+        if _is_ignored_warning(warning):
+            if isinstance(warning, dict):
+                ignored.append(str(warning.get("source_entity_id") or warning.get("message") or warning))
+            else:
+                ignored.append(str(warning))
+    return _dedupe(ignored)
+
+
+def _is_ignored_item(item: Any) -> bool:
+    return isinstance(item, dict) and bool(item.get("ignored"))
+
+
+def _is_ignored_warning(warning: Any) -> bool:
+    return isinstance(warning, dict) and (warning.get("code") == "entity_ignored" or warning.get("severity") == "info")
+
+
+def _is_stale_warning(warning: Any) -> bool:
+    text = str(warning.get("code") if isinstance(warning, dict) else warning).lower()
+    message = str(warning.get("message", "") if isinstance(warning, dict) else warning).lower()
+    return "stale" in text or "veraltet" in message
+
+
+def _warning_message(warning: Any) -> str:
+    if isinstance(warning, dict):
+        return str(warning.get("message") or warning.get("code") or warning)
+    return str(warning)
+
+
+def _low_battery_threshold() -> float:
+    try:
+        return float(os.getenv("ECOFLOW_LOW_BATTERY_THRESHOLD_PERCENT", "20"))
+    except ValueError:
+        return 20.0
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
+def _entity_label(item: Any) -> str:
+    if not isinstance(item, dict):
+        return str(item)
+    entity_id = item.get("entity_id", "-")
+    state = item.get("state", "-")
+    friendly_name = item.get("friendly_name")
+    if friendly_name:
+        return f"{entity_id} ({friendly_name}) - {state}"
+    return f"{entity_id} - {state}"
+
+
+def _count(data: dict[str, Any], key: str) -> int:
+    try:
+        return int(data.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _format_number(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "unbekannt"
+    if number == 0:
+        number = 0.0
+    return f"{number:.0f}"

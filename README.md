@@ -500,6 +500,94 @@ Suche im Internet nach aktuellen Informationen zu Python 3.11.
 Pruefe im Internet, welche Dokumentation Microsoft zu OneDrive Search bereitstellt.
 ```
 
+## Nuetzliche Skills
+
+Hammer Jarvis v1.5 enthaelt einen lokalen Skills-Layer fuer haeufige Arbeitsablaeufe.
+Skills kombinieren vorhandene sichere Werkzeuge wie Dateisuche, Inhaltsextraktion,
+Webrecherche und Datei-Export. Alle lokalen Dokumente bleiben lokal; Dateiinhalte
+werden nicht extern hochgeladen.
+
+Unterstuetzte Skills:
+
+- Lokale Dokumente zusammenfassen
+- Eckdaten aus Dokumenten extrahieren, zum Beispiel aus Kaufvertraegen
+- Suchberichte als Markdown erstellen
+- Dokumentenindizes als Excel erstellen
+- Webrecherche-Berichte mit Quellen als Markdown erstellen
+- Webquellen als Excel-Liste exportieren
+
+Alle erzeugten Dateien werden unter `workspace/exports` gespeichert.
+Bestehende Dateien werden nicht ueberschrieben; Hammer Jarvis erzeugt bei Bedarf
+einen neuen Dateinamen mit Suffix. Dateien werden nicht geloescht, nicht verschoben
+und OneDrive-Dateien werden nicht veraendert.
+
+Hammer Jarvis durchsucht und liest nur Ordner, die in `FILE_SEARCH_ALLOWED_DIRS`
+konfiguriert sind. Wenn das lokale Ollama-LLM nicht erreichbar ist, nutzt die
+Dokumentzusammenfassung deterministische Textauszuege statt erfundener Inhalte.
+
+Lokale Endpunkte:
+
+```text
+GET http://127.0.0.1:8001/assistant/skills
+POST http://127.0.0.1:8001/assistant/skills/document/summarize
+POST http://127.0.0.1:8001/assistant/skills/document/extract-key-fields
+POST http://127.0.0.1:8001/assistant/skills/files/search-report
+POST http://127.0.0.1:8001/assistant/skills/files/index-excel
+POST http://127.0.0.1:8001/assistant/skills/web/report
+POST http://127.0.0.1:8001/assistant/skills/web/excel
+```
+
+Beispiele:
+
+```text
+Fasse den besten Treffer zusammen.
+Extrahiere die wichtigsten Daten aus dem Kaufvertrag.
+Erstelle mir einen Bericht ueber alle Hauskauf-PDFs.
+Erstelle eine Excel-Uebersicht der Hauskauf-Dokumente.
+Recherchiere Foerderungen fuer PV in Bayern und erstelle eine Excel mit Quellen.
+```
+
+## Sichere Aktionen und Bestaetigungen
+
+Hammer Jarvis v1.6 kann aus Diagnose- und Suchergebnissen sichere naechste
+Aktionen vorschlagen. Diese Aktionen werden zunaechst lokal als ausstehende
+Aktionen gespeichert und koennen im Dashboard oder per Chat ausgefuehrt oder
+abgelehnt werden.
+
+Sicherheitsregeln:
+
+- Gruene Aktionen sind lese- oder exportorientiert und koennen direkt ausgefuehrt werden.
+- Gelbe Aktionen brauchen eine ausdrueckliche Bestaetigung.
+- Rote Aktionen sind blockiert.
+- Home-Assistant-Schaltaktionen werden nie ohne Bestaetigung ausgefuehrt.
+- Dateien werden nicht geloescht.
+- E-Mails werden nicht gesendet.
+- Gmail und OneDrive-Dateien werden nicht veraendert.
+- SPS-/PLC-Schreibzugriffe sind blockiert.
+- Alle Ausfuehrungen laufen ueber die lokale Tool Registry und werden im Audit-Log protokolliert.
+
+Ausstehende Aktionen laufen standardmaessig nach kurzer Zeit ab.
+Die aktuelle In-Memory-Aktionsliste wird nicht dauerhaft gespeichert.
+
+Lokale Endpunkte:
+
+```text
+GET http://127.0.0.1:8001/assistant/actions/pending
+POST http://127.0.0.1:8001/assistant/actions/{action_id}/execute
+POST http://127.0.0.1:8001/assistant/actions/{action_id}/reject
+DELETE http://127.0.0.1:8001/assistant/actions/expired
+```
+
+Beispiele:
+
+```text
+Was schlaegst du vor?
+Welche Aktionen stehen aus?
+Fuehre Aktion 1 aus.
+Bestaetige Aktion 1.
+Aktion 1 ablehnen.
+```
+
 ## Tests
 
 ```powershell

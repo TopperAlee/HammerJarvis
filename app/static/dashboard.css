@@ -257,7 +257,9 @@ h1 {
     "home core energy"
     "mail chat calendar"
     "files chat research"
-    "alerts chat research";
+    "alerts chat research"
+    "skills chat research"
+    "actions chat research";
   gap: 16px;
   margin-top: 18px;
 }
@@ -306,6 +308,8 @@ h1 {
 .files-panel { grid-area: files; }
 .research-panel { grid-area: research; }
 .alerts-panel { grid-area: alerts; }
+.skills-panel { grid-area: skills; }
+.actions-panel { grid-area: actions; }
 .chat-panel { grid-area: chat; }
 
 .panel-heading {
@@ -558,6 +562,41 @@ h1 {
   line-height: 1.35;
 }
 
+.action-card {
+  display: grid;
+  gap: 8px;
+}
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.risk-badge {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.risk-green {
+  color: var(--green);
+  border-color: rgba(98, 255, 155, 0.55);
+}
+
+.risk-yellow {
+  color: var(--amber);
+  border-color: rgba(255, 176, 32, 0.65);
+}
+
+.risk-red {
+  color: var(--red);
+  border-color: rgba(255, 77, 77, 0.65);
+}
+
 .signal-list.compact {
   max-height: 190px;
   overflow: auto;
@@ -756,7 +795,8 @@ select:focus {
       "home chat"
       "mail chat"
       "calendar research"
-      "files alerts";
+      "files alerts"
+      "skills actions";
   }
 
   .core-stage {
@@ -791,6 +831,8 @@ select:focus {
       "files"
       "research"
       "alerts"
+      "skills"
+      "actions"
       "chat";
   }
 
