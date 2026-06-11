@@ -225,6 +225,157 @@ def test_ollama_status_endpoint_returns_200(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["provider"] == "ollama"
     assert response.json()["reachable"] is True
+    assert response.json()["configured_model_installed"] is True
+    assert response.json()["installed_models"] == ["qwen3:8b"]
+
+
+def test_ollama_status_reports_model_size(monkeypatch) -> None:
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:8b")
+
+    def fake_get(url, timeout):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"models": [{"name": "qwen3:8b", "size": 4900000000}]}
+
+        return Response()
+
+    monkeypatch.setattr("app.main.requests.get", fake_get)
+
+    response = client.get("/assistant/ollama/status")
+
+    assert response.status_code == 200
+    assert response.json()["configured_model_size_bytes"] == 4900000000
+
+
+def test_ollama_status_reports_fast_and_smart_models(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:8b")
+    monkeypatch.setenv("OLLAMA_MODEL_FAST", "llama3.2:3b")
+    monkeypatch.setenv("OLLAMA_MODEL_SMART", "qwen3:8b")
+    monkeypatch.setenv("LLM_COMPLEXITY_ROUTING", "true")
+
+    def fake_get(url, timeout):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"models": [{"name": "qwen3:8b"}]}
+
+        return Response()
+
+    monkeypatch.setattr("app.main.requests.get", fake_get)
+
+    response = client.get("/assistant/ollama/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["main_model"] == "qwen3:8b"
+    assert data["fast_model"] == "llama3.2:3b"
+    assert data["smart_model"] == "qwen3:8b"
+    assert data["fast_model_installed"] is False
+    assert data["smart_model_installed"] is True
+    assert data["complexity_routing_enabled"] is True
+
+
+def test_ollama_benchmark_returns_timing(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_ENABLED", "true")
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:8b")
+
+    def fake_create_response(self, messages, tools):
+        return {"text": "Hammer Jarvis bereit.", "tool_calls": []}
+
+    monkeypatch.setattr(
+        "app.assistant.llm_client.LLMClient.create_response_with_tools",
+        fake_create_response,
+    )
+
+    response = client.get("/assistant/ollama/benchmark")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["provider"] == "ollama"
+    assert data["model"] == "qwen3:8b"
+    assert data["response_time_ms"] >= 0
+    assert data["output_length"] == len("Hammer Jarvis bereit.")
+
+
+def test_ollama_models_benchmark_only_runs_installed_configured_models(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_ENABLED", "true")
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:8b")
+    monkeypatch.setenv("OLLAMA_MODEL_FAST", "llama3.2:3b")
+    monkeypatch.setenv("OLLAMA_MODEL_SMART", "qwen3:8b")
+
+    def fake_get(url, timeout):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"models": [{"name": "qwen3:8b"}]}
+
+        return Response()
+
+    monkeypatch.setattr("app.main.requests.get", fake_get)
+
+    def fake_create_response(self, messages, tools, model=None):
+        assert model == "qwen3:8b"
+        return {"text": "OK", "tool_calls": []}
+
+    monkeypatch.setattr("app.assistant.llm_client.LLMClient.create_response_with_tools", fake_create_response)
+
+    response = client.get("/assistant/ollama/benchmark/models")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["model"] for item in data["benchmarks"]] == ["qwen3:8b"]
+    assert data["skipped_models"] == [{"model": "llama3.2:3b", "reason": "not_installed"}]
+
+
+def test_complexity_routing_is_disabled_by_default(monkeypatch) -> None:
+    from app.assistant.llm_client import LLMClient
+
+    monkeypatch.delenv("LLM_COMPLEXITY_ROUTING", raising=False)
+
+    assert LLMClient().complexity_routing_enabled() is False
+
+
+def test_ollama_warmup_enabled_by_example_default(monkeypatch) -> None:
+    monkeypatch.delenv("OLLAMA_WARMUP_ENABLED", raising=False)
+    monkeypatch.delenv("OLLAMA_WARMUP_ON_STARTUP", raising=False)
+
+    assert __import__("os").getenv("OLLAMA_WARMUP_ENABLED", "true") == "true"
+    assert __import__("os").getenv("OLLAMA_WARMUP_ON_STARTUP", "true") == "true"
+
+
+def test_ollama_performance_advice_returns_safe_gpu_guidance(monkeypatch) -> None:
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:8b")
+    monkeypatch.setenv("OLLAMA_MODEL_FAST", "llama3.2:3b")
+
+    def fake_get(url, timeout):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"models": [{"name": "qwen3:8b"}]}
+
+        return Response()
+
+    monkeypatch.setattr("app.main.requests.get", fake_get)
+
+    response = client.get("/assistant/ollama/performance-advice")
+
+    assert response.status_code == 200
+    assert "Ollama entscheidet lokal" in " ".join(response.json()["advice"])
+    assert response.json()["fast_model_installed"] is False
 
 
 def test_ollama_unavailable_returns_safe_response(monkeypatch) -> None:
@@ -479,6 +630,68 @@ def test_home_assistant_offline_executes_problem_tool(monkeypatch) -> None:
     assert executed == ["ha"]
     assert result["tool"] == "home_check"
     assert "Kritisch: 1, Warnungen: 1, Infos: 0" in result["answer"]
+
+
+def test_deterministic_commands_do_not_call_llm(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("LLM_ENABLED", "true")
+    monkeypatch.setenv("EXPORT_DIR", str(tmp_path / "exports"))
+    monkeypatch.setenv("FILE_SEARCH_ALLOWED_DIRS", str(tmp_path))
+    (tmp_path / "mietvertrag.pdf").write_text("dummy", encoding="utf-8")
+
+    class RaisingLLMClient:
+        def is_available(self):
+            return True
+
+        def create_response_with_tools(self, messages, tools):
+            raise AssertionError("LLM must not be called for deterministic commands")
+
+    registry = ToolRegistry()
+    registry.register("web_research", "Web", ActionRisk.GREEN, lambda query: {"sources": [{"title": "Quelle", "url": "https://example.test"}], "summary": "ok"})
+
+    orchestrator = AssistantOrchestrator(registry=registry, llm_client=RaisingLLMClient())
+
+    checks = {
+        "Welche Smart-Home-Aktionen sind freigegeben?": "home_assistant_list_allowed_actions",
+        "Erstelle Excel fuer Ausgaben": "file_create_excel",
+        "Suche Datei Mietvertrag": "file_search",
+        "Recherchiere offizielle Dokumentation zu Python": "web_research",
+    }
+
+    for command, expected_tool in checks.items():
+        result = orchestrator.handle_message(command)
+        assert result["tool"] == expected_tool
+
+
+def test_deterministic_commands_bypass_native_and_compatible_ollama(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("LLM_ENABLED", "true")
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_USE_NATIVE_API", "true")
+    monkeypatch.setenv("EXPORT_DIR", str(tmp_path / "exports"))
+    monkeypatch.setenv("FILE_SEARCH_ALLOWED_DIRS", str(tmp_path))
+    (tmp_path / "hauskauf.pdf").write_text("dummy", encoding="utf-8")
+
+    def fail_native(*args, **kwargs):
+        raise AssertionError("NativeOllamaClient must not be called")
+
+    def fail_compatible(*args, **kwargs):
+        raise AssertionError("OpenAI-compatible Ollama client must not be called")
+
+    monkeypatch.setattr("app.assistant.llm.native_ollama_client.NativeOllamaClient.chat", fail_native)
+    monkeypatch.setattr("app.assistant.llm_client.LLMClient._ollama_chat_completion", fail_compatible)
+
+    commands = [
+        "Hauscheck",
+        "Energiecheck",
+        "Welche Smart-Home-Aktionen sind freigegeben?",
+        "Erstelle Excel fuer Ausgaben",
+        "Suche Datei Hauskauf",
+        "Recherchiere offizielle Dokumentation zu Python",
+    ]
+
+    orchestrator = AssistantOrchestrator()
+    for command in commands:
+        result = orchestrator.handle_message(command)
+        assert result["tool"] != "general_answer"
 
 
 def test_tool_result_fallback_when_llm_summary_fails(monkeypatch) -> None:

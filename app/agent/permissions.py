@@ -4,6 +4,7 @@ from enum import StrEnum
 class ActionRisk(StrEnum):
     GREEN = "GREEN"
     YELLOW = "YELLOW"
+    ORANGE = "ORANGE"
     RED = "RED"
 
 

@@ -1,8 +1,10 @@
+import os
 from datetime import datetime, timezone
 from typing import Any
 
 import requests
 
+from app.assistant.performance.timing import time_operation
 from app.config.entity_overrides import get_ignore_reason, is_ignored_entity
 from app.config.settings import get_settings
 
@@ -268,13 +270,14 @@ class HomeAssistantTool:
             "Authorization": f"Bearer {settings.home_assistant_token}",
             "Content-Type": "application/json",
         }
-        response = requests.request(
-            method,
-            url,
-            headers=headers,
-            json=json_data,
-            timeout=10,
-        )
+        with time_operation(f"home_assistant.{method.lower()}.{path}", "home_assistant"):
+            response = requests.request(
+                method,
+                url,
+                headers=headers,
+                json=json_data,
+                timeout=float(os.getenv("HOME_ASSISTANT_TIMEOUT_SECONDS", "10")),
+            )
         response.raise_for_status()
         if not response.content:
             return {}

@@ -117,6 +117,30 @@ def test_extraction_error_does_not_crash(monkeypatch, tmp_path) -> None:
     assert result["error"] is True
 
 
+def test_content_extraction_cache_reuses_unchanged_file(monkeypatch, tmp_path) -> None:
+    from app.tools.files import content_extractors
+
+    path = tmp_path / "cached.txt"
+    path.write_text("Kaufvertrag", encoding="utf-8")
+    calls = {"count": 0}
+    monkeypatch.setenv("FILE_CONTENT_CACHE_ENABLED", "true")
+    monkeypatch.setenv("FILE_CONTENT_CACHE_MAX_ITEMS", "200")
+    content_extractors.clear_content_cache()
+
+    def fake_extract(_path: Path) -> str:
+        calls["count"] += 1
+        return "Kaufvertrag"
+
+    monkeypatch.setattr("app.tools.files.content_extractors.extract_text_from_text_file", fake_extract)
+
+    first = content_extractors.extract_text(path)
+    second = content_extractors.extract_text(path)
+
+    assert first["text"] == second["text"]
+    assert calls["count"] == 1
+    assert second["cache"] == "hit"
+
+
 def test_content_search_endpoint_returns_200(monkeypatch, tmp_path) -> None:
     allowed = tmp_path / "allowed"
     allowed.mkdir()

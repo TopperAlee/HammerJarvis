@@ -4,6 +4,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from app.assistant.performance.timing import time_operation
 from app.assistant.response_parser import extract_text, extract_tool_calls
 from app.assistant.system_prompt import SYSTEM_PROMPT
 
@@ -35,6 +36,27 @@ class LLMClient:
         if self.provider_name() == "ollama":
             return os.getenv("OLLAMA_MODEL", "qwen3:8b")
         return os.getenv("OPENAI_MODEL", "gpt-5.2")
+
+    def fast_model_name(self) -> str:
+        return os.getenv("OLLAMA_MODEL_FAST", "llama3.2:3b")
+
+    def smart_model_name(self) -> str:
+        return os.getenv("OLLAMA_MODEL_SMART", os.getenv("OLLAMA_MODEL", "qwen3:8b"))
+
+    def complexity_routing_enabled(self) -> bool:
+        return os.getenv("LLM_COMPLEXITY_ROUTING", "false").strip().lower() == "true"
+
+    def native_ollama_enabled(self) -> bool:
+        return os.getenv("OLLAMA_USE_NATIVE_API", "false").strip().lower() == "true"
+
+    def select_model(self, message: str | None = None, complexity: str = "default") -> str:
+        if self.provider_name() != "ollama" or not self.complexity_routing_enabled():
+            return self.model_name()
+        if complexity == "smart":
+            return self.smart_model_name()
+        if complexity == "fast" or _looks_simple_conversation(message or ""):
+            return self.fast_model_name()
+        return self.model_name()
 
     def base_url(self) -> str | None:
         if self.provider_name() == "ollama":
@@ -74,6 +96,7 @@ class LLMClient:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        model: str | None = None,
     ) -> dict[str, Any]:
         if not self.is_available():
             return {
@@ -84,16 +107,19 @@ class LLMClient:
             }
 
         if self.provider_name() == "ollama":
-            return self._ollama_chat_completion(messages)
+            if self.native_ollama_enabled():
+                return self._native_ollama_chat_completion(messages, model=model)
+            return self._ollama_chat_completion(messages, model=model)
 
         from openai import OpenAI
 
         client = OpenAI(api_key=self.api_key)
-        response = client.responses.create(
-            model=self.model_name(),
-            input=messages,
-            tools=tools,
-        )
+        with time_operation("llm.openai.responses", "llm"):
+            response = client.responses.create(
+                model=model or self.model_name(),
+                input=messages,
+                tools=tools,
+            )
         return {
             "raw": response,
             "text": extract_text(response),
@@ -124,6 +150,8 @@ class LLMClient:
                     ),
                 },
             ]
+            if self.native_ollama_enabled():
+                return self._native_ollama_chat_completion(summary_messages)
             return self._ollama_chat_completion(summary_messages)
 
         from openai import OpenAI
@@ -137,13 +165,14 @@ class LLMClient:
             for output in tool_outputs
         ]
         client = OpenAI(api_key=self.api_key)
-        response = client.responses.create(
-            model=self.model_name(),
-            input=[*original_messages, *tool_messages],
-        )
+        with time_operation("llm.openai.final_response", "llm"):
+            response = client.responses.create(
+                model=self.model_name(),
+                input=[*original_messages, *tool_messages],
+            )
         return {"raw": response, "text": extract_text(response)}
 
-    def _ollama_chat_completion(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    def _ollama_chat_completion(self, messages: list[dict[str, Any]], model: str | None = None) -> dict[str, Any]:
         from openai import OpenAI
 
         messages_with_system = _ensure_system_prompt(messages)
@@ -151,17 +180,29 @@ class LLMClient:
             base_url=self.base_url(),
             api_key=os.getenv("OLLAMA_API_KEY", "ollama") or "ollama",
         )
-        response = client.chat.completions.create(
-            model=self.model_name(),
-            messages=messages_with_system,
-            temperature=0.2,
-        )
+        with time_operation("llm.ollama.chat_completion", "llm"):
+            response = client.chat.completions.create(
+                model=model or self.select_model(_last_user_message(messages_with_system)),
+                messages=messages_with_system,
+                temperature=0.2,
+            )
         user_message = _last_user_message(messages_with_system)
         text = sanitize_identity_response(
             user_message,
             response.choices[0].message.content or "",
         )
         return {"raw": response, "text": text, "tool_calls": []}
+
+    def _native_ollama_chat_completion(self, messages: list[dict[str, Any]], model: str | None = None) -> dict[str, Any]:
+        from app.assistant.llm.native_ollama_client import NativeOllamaClient
+
+        messages_with_system = _ensure_system_prompt(messages)
+        selected_model = model or self.select_model(_last_user_message(messages_with_system))
+        with time_operation("llm.ollama.native_chat", "llm"):
+            response = NativeOllamaClient().chat(messages_with_system, model=selected_model)
+        user_message = _last_user_message(messages_with_system)
+        text = sanitize_identity_response(user_message, str(response.get("text") or ""))
+        return {"raw": response, "text": text, "tool_calls": [], "mode": "ollama_native"}
 
 
 def sanitize_identity_response(user_message: str, text: str) -> str:
@@ -213,3 +254,10 @@ def _is_identity_question(message: str) -> bool:
 def _contains_base_model_identity(text: str) -> bool:
     normalized = text.lower()
     return any(term.lower() in normalized for term in ("Alibaba", "Qwen", "OpenAI", "ChatGPT"))
+
+
+def _looks_simple_conversation(message: str) -> bool:
+    normalized = message.strip().lower()
+    if len(normalized) <= 80:
+        return True
+    return any(term in normalized for term in ("hallo", "danke", "kurz", "in einem satz"))

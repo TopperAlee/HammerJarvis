@@ -4,9 +4,9 @@ from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
+from app.assistant.performance.timing import time_operation
 
 
-MAX_RESPONSE_BYTES = 1_000_000
 TEXT_PREVIEW_CHARS = 5000
 
 
@@ -16,11 +16,12 @@ class PageFetcher:
         if parsed.scheme not in {"http", "https"}:
             return {"url": url, "fetched": False, "error": True, "message": "Nur http/https URLs sind erlaubt."}
         try:
-            response = httpx.get(
-                url,
-                follow_redirects=True,
-                timeout=float(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", "15")),
-            )
+            with time_operation("web_fetch.page", "web"):
+                response = httpx.get(
+                    url,
+                    follow_redirects=True,
+                    timeout=float(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", "15")),
+                )
             response.raise_for_status()
         except Exception:
             return {"url": url, "fetched": False, "error": True, "message": "Seite konnte nicht geladen werden."}
@@ -28,7 +29,7 @@ class PageFetcher:
         content_type = response.headers.get("content-type", "").lower()
         if not any(kind in content_type for kind in ("text/html", "text/plain", "application/xhtml")):
             return {"url": url, "fetched": False, "error": True, "message": "Binaere oder unsichere Datei wurde nicht geladen."}
-        content = response.content[:MAX_RESPONSE_BYTES]
+        content = response.content[: int(os.getenv("WEB_FETCH_MAX_BYTES", "500000"))]
         soup = BeautifulSoup(content, "html.parser")
         for element in soup(["script", "style", "noscript"]):
             element.decompose()

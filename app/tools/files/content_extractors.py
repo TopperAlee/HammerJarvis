@@ -10,9 +10,11 @@ from openpyxl import load_workbook
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError, PdfStreamError
 
+from app.assistant.performance.timing import time_operation
 
 SUPPORTED_CONTENT_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xlsm", ".csv", ".txt", ".md", ".json"}
-TEXT_PREVIEW_CHARS = 1000
+TEXT_PREVIEW_CHARS = int(os.getenv("FILE_CONTENT_PREVIEW_CHARS", "4000"))
+_CONTENT_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 
 
 def extract_text_from_pdf(path: Path) -> dict[str, Any]:
@@ -63,36 +65,44 @@ def extract_text(path: Path) -> dict[str, Any]:
         if suffix not in SUPPORTED_CONTENT_EXTENSIONS:
             return {"path": str(path), "supported": False, "skipped": True, "reason": "nicht unterstuetzter Dateityp"}
         max_bytes = int(float(os.getenv("FILE_CONTENT_MAX_FILE_SIZE_MB", "25")) * 1024 * 1024)
-        if path.stat().st_size > max_bytes:
+        stat = path.stat()
+        if stat.st_size > max_bytes:
             return {"path": str(path), "supported": True, "skipped": True, "reason": "Datei zu gross"}
-        if suffix == ".pdf":
-            pdf_result = extract_text_from_pdf(path)
-            if not pdf_result.get("success"):
-                return {
-                    "path": str(path),
-                    "success": False,
-                    "supported": True,
-                    "skipped": True,
-                    "error": True,
-                    "reason": pdf_result.get("reason"),
-                    "message": pdf_result.get("message"),
-                    "text": "",
-                }
-            text = str(pdf_result.get("text", ""))
-        elif suffix == ".docx":
-            text = extract_text_from_docx(path)
-        elif suffix in {".xlsx", ".xlsm"}:
-            text = extract_text_from_xlsx(path)
-        else:
-            text = extract_text_from_text_file(path)
+        cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+        cached = _get_cached(cache_key)
+        if cached is not None:
+            return {**cached, "cache": "hit"}
+        with time_operation(f"content_extract.{suffix}", "content_search"):
+            if suffix == ".pdf":
+                pdf_result = extract_text_from_pdf(path)
+                if not pdf_result.get("success"):
+                    return {
+                        "path": str(path),
+                        "success": False,
+                        "supported": True,
+                        "skipped": True,
+                        "error": True,
+                        "reason": pdf_result.get("reason"),
+                        "message": pdf_result.get("message"),
+                        "text": "",
+                    }
+                text = str(pdf_result.get("text", ""))
+            elif suffix == ".docx":
+                text = extract_text_from_docx(path)
+            elif suffix in {".xlsx", ".xlsm"}:
+                text = extract_text_from_xlsx(path)
+            else:
+                text = extract_text_from_text_file(path)
         text = clean_extracted_text(text)
-        return {
+        result = {
             "path": str(path),
             "supported": True,
             "skipped": False,
             "text": text,
             "preview": text[:TEXT_PREVIEW_CHARS],
         }
+        _set_cached(cache_key, result)
+        return {**result, "cache": "miss"} if _content_cache_enabled() else result
     except Exception as exc:
         return {"path": str(path), "supported": True, "skipped": False, "error": True, "message": str(exc), "text": ""}
 
@@ -107,3 +117,38 @@ def clean_extracted_text(text: str) -> str:
     cleaned = re.sub(r"([a-zäöüß])([A-ZÄÖÜ])", r"\1 \2", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned[:TEXT_PREVIEW_CHARS * 20]
+
+
+def clear_content_cache() -> None:
+    _CONTENT_CACHE.clear()
+
+
+def _content_cache_enabled() -> bool:
+    return os.getenv("FILE_CONTENT_CACHE_ENABLED", "true").strip().lower() == "true"
+
+
+def _content_cache_max_items() -> int:
+    try:
+        return max(0, int(os.getenv("FILE_CONTENT_CACHE_MAX_ITEMS", "200")))
+    except ValueError:
+        return 200
+
+
+def _get_cached(key: tuple[str, int, int]) -> dict[str, Any] | None:
+    if not _content_cache_enabled():
+        return None
+    cached = _CONTENT_CACHE.get(key)
+    return dict(cached) if cached else None
+
+
+def _set_cached(key: tuple[str, int, int], result: dict[str, Any]) -> None:
+    if not _content_cache_enabled() or result.get("error") or result.get("skipped"):
+        return
+    max_items = _content_cache_max_items()
+    if max_items <= 0:
+        return
+    while len(_CONTENT_CACHE) >= max_items:
+        oldest_key = next(iter(_CONTENT_CACHE))
+        _CONTENT_CACHE.pop(oldest_key, None)
+    # Store bounded cleaned text only; raw files, binary content and secrets are never cached.
+    _CONTENT_CACHE[key] = dict(result)

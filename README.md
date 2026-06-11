@@ -197,27 +197,62 @@ GET http://127.0.0.1:8001/assistant/timetree/today
 TimeTree-Schreiben und das Erstellen von TimeTree-Terminen sind nicht unterstuetzt.
 Speichere keine TimeTree-Benutzernamen, Passwoerter oder sonstigen Zugangsdaten in Hammer Jarvis.
 
-## LLM Core / OpenAI
+## LLM Core / lokal und optional OpenAI
 
-Hammer Jarvis v0.7 kann OpenAI als zentrale Orchestrierungsschicht verwenden.
-Die OpenAI-Anbindung laeuft nur serverseitig im lokalen Backend.
-Der API-Key wird nicht an den Browser gesendet.
+Hammer Jarvis kann lokale LLMs ueber Ollama oder optional OpenAI als
+Orchestrierungsschicht verwenden. Bekannte lokale Domaenen wie EcoFlow,
+Home Assistant, Gmail, TimeTree und Dateien laufen zuerst ueber echte Tools.
+Das LLM formatiert oder ergaenzt Antworten nur dort, wo es sicher passt.
 
-Aktiviere die LLM-Anbindung in deiner lokalen `.env`:
+Lokaler Ollama-Betrieb:
+
+```text
+LLM_ENABLED=true
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434/v1
+OLLAMA_MODEL=qwen3:8b
+OLLAMA_MODEL_FAST=llama3.2:3b
+OLLAMA_MODEL_SMART=qwen3:8b
+OLLAMA_API_KEY=ollama
+LLM_TOOL_MODE=true
+LLM_COMPLEXITY_ROUTING=false
+OLLAMA_KEEP_ALIVE=30m
+OLLAMA_USE_NATIVE_API=false
+OLLAMA_WARMUP_ENABLED=true
+OLLAMA_WARMUP_ON_STARTUP=true
+```
+
+Ollama entscheidet selbst, ob CPU oder GPU verwendet wird. Wenn eine passende
+GPU verfuegbar ist und das Modell hineinpasst, nutzt Ollama sie automatisch.
+Fuer schnelle Alltagsantworten kann ein kleineres Modell wie `llama3.2:3b`
+als Fast-Modell konfiguriert werden; `qwen3:8b` bleibt als staerkeres
+Standardmodell geeignet.
+
+Lokale Status- und Diagnose-Endpunkte:
+
+```text
+GET http://127.0.0.1:8001/assistant/llm/status
+GET http://127.0.0.1:8001/assistant/ollama/status
+GET http://127.0.0.1:8001/assistant/ollama/benchmark
+GET http://127.0.0.1:8001/assistant/ollama/benchmark/native
+GET http://127.0.0.1:8001/assistant/ollama/benchmark/warm
+POST http://127.0.0.1:8001/assistant/llm/test
+```
+
+`/assistant/ollama/status` zeigt, ob Ollama erreichbar ist, welche Modelle
+installiert sind und ob das konfigurierte Modell gefunden wurde.
+`/assistant/ollama/benchmark` fuehrt einen kurzen lokalen Antworttest aus und
+liefert die gemessene Antwortzeit in Millisekunden.
+
+Optionale OpenAI-Anbindung:
 
 ```text
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-5.2
 LLM_ENABLED=true
+LLM_PROVIDER=openai
 LLM_TOOL_MODE=true
 LLM_MAX_TOOL_CALLS=5
-```
-
-Der Status ist lokal abrufbar:
-
-```text
-GET http://127.0.0.1:8001/assistant/llm/status
-POST http://127.0.0.1:8001/assistant/llm/test
 ```
 
 Hammer Jarvis laesst das LLM keine externen APIs direkt aufrufen.
@@ -226,7 +261,8 @@ Gruene Leseaktionen koennen direkt ausgefuehrt werden.
 Gelbe Aktionen brauchen eine Bestaetigung.
 Rote Aktionen wie E-Mail-Senden, PLC-Schreiben oder Dateien loeschen bleiben blockiert.
 
-Ohne `OPENAI_API_KEY` oder mit `LLM_ENABLED=false` nutzt Hammer Jarvis den lokalen regelbasierten Fallback.
+Mit `LLM_PROVIDER=none` oder `LLM_ENABLED=false` nutzt Hammer Jarvis den
+lokalen regelbasierten Fallback.
 
 ## Testen mit `/docs`
 
@@ -401,7 +437,14 @@ Grosse Dateien koennen uebersprungen werden. Standardlimit:
 
 ```text
 FILE_CONTENT_MAX_FILE_SIZE_MB=25
+FILE_CONTENT_CACHE_ENABLED=true
+FILE_CONTENT_CACHE_MAX_ITEMS=200
 ```
+
+Die Inhaltsextraktion nutzt optional einen kleinen In-Memory-Cache fuer
+unveraenderte Dateien. Der Cache speichert nur extrahierten Text aus lokalen
+erlaubten Ordnern, keine Binaerdaten und keine Dateien ausserhalb der
+konfigurierten Suchpfade.
 
 Scans oder bildbasierte PDFs werden noch nicht per OCR gelesen.
 Fuer solche Dateien braucht Hammer Jarvis spaeter eine separate lokale OCR-Funktion.
@@ -553,6 +596,441 @@ Hammer Jarvis v1.6 kann aus Diagnose- und Suchergebnissen sichere naechste
 Aktionen vorschlagen. Diese Aktionen werden zunaechst lokal als ausstehende
 Aktionen gespeichert und koennen im Dashboard oder per Chat ausgefuehrt oder
 abgelehnt werden.
+
+## Sichere Smart-Home-Aktionen
+
+Hammer Jarvis v1.7 kann begrenzte Home-Assistant-Aktionen vorbereiten. Aktionen
+sind standardmaessig gesperrt und muessen explizit in dieser Datei freigegeben
+werden:
+
+```text
+app/config/home_assistant_action_allowlist.json
+```
+
+Unterstuetzt werden zunaechst nur:
+
+- `light.turn_on`
+- `light.turn_off`
+- `switch.turn_on`
+- `switch.turn_off`
+- `scene.turn_on`
+
+Jede Ausfuehrung ist eine gelbe Aktion und braucht eine ausdrueckliche
+Bestaetigung, zum Beispiel:
+
+```text
+Schalte Wohnzimmer Licht ein.
+Bestaetige Aktion 1.
+```
+
+Gefaehrliche oder sicherheitskritische Domaenen bleiben blockiert. Dazu gehoeren
+unter anderem Locks, Alarmanlagen, Heizung/Thermostate, Garagentore, Oefen,
+Pumpen, Kameras und industrielle Steuerungen. Hammer Jarvis akzeptiert keine
+frei eingegebenen Home-Assistant-Servicenamen.
+
+Beispiel-Allowlist:
+
+```json
+{
+  "allowed_entities": [
+    {
+      "entity_id": "light.wohnzimmer",
+      "friendly_name": "Wohnzimmer Licht",
+      "domain": "light",
+      "allowed_actions": ["turn_on", "turn_off"]
+    }
+  ],
+  "allowed_scenes": [],
+  "blocked_domains": ["lock", "alarm_control_panel", "cover", "climate"]
+}
+```
+
+Lokaler Status:
+
+```text
+GET http://127.0.0.1:8001/assistant/home-assistant/actions/allowed
+```
+
+## Home Assistant Entity Catalog
+
+Hammer Jarvis kann alle Home-Assistant-Entities regelmaessig read-only abrufen
+und lokal als sicheren Entity-Katalog zwischenspeichern. Der Katalog ist fuer
+Suche, Diagnose, Discovery und Freigabe-Vorschlaege gedacht.
+
+Wichtig: Der Katalog gibt keine Schaltrechte. Nur weil Jarvis eine Entity kennt,
+darf er sie nicht automatisch steuern. Schalten bleibt weiterhin:
+
+1. erlaubte Domain
+2. Eintrag in `app/config/home_assistant_action_allowlist.json`
+3. gelbe Aktion mit ausdruecklicher Bestaetigung
+
+Konfiguration in `.env`:
+
+```text
+HA_ENTITY_SYNC_ENABLED=true
+HA_ENTITY_SYNC_INTERVAL_SECONDS=300
+HA_ENTITY_CACHE_FILE=app/data/home_assistant/entities_cache.json
+HA_ENTITY_CACHE_MAX_AGE_SECONDS=900
+```
+
+Der Cache liegt lokal unter `app/data/home_assistant/` und wird nicht committed.
+Gespeichert werden nur sichere Metadaten wie Entity-ID, Domain, Status,
+Friendly Name, Zeitstempel und eine kleine Attribut-Zusammenfassung. Vollstaendige
+Attribute werden nicht blind gespeichert.
+
+Lokale Endpunkte:
+
+```text
+GET  http://127.0.0.1:8001/assistant/home-assistant/entities/status
+POST http://127.0.0.1:8001/assistant/home-assistant/entities/sync
+GET  http://127.0.0.1:8001/assistant/home-assistant/entities
+GET  http://127.0.0.1:8001/assistant/home-assistant/entities/search?q=flur
+GET  http://127.0.0.1:8001/assistant/home-assistant/entities/unavailable
+GET  http://127.0.0.1:8001/assistant/home-assistant/entities/actionable-candidates
+GET  http://127.0.0.1:8001/assistant/home-assistant/entities/light.wohnzimmer
+```
+
+Beispiele:
+
+```text
+Synchronisiere Home Assistant Entities.
+Zeige alle Lichter.
+Suche Flur in Home Assistant.
+Welche Geraete kann ich freigeben?
+Zeige Details zu switch.hall.
+```
+
+Switches werden nur als moegliche Kandidaten angezeigt. Sie koennen Steckdosen
+oder echte Verbraucher sein und sollten nur freigegeben werden, wenn eindeutig
+klar ist, dass die Aktion ungefaehrlich ist.
+
+## Universal Home Assistant Control Broker
+
+Hammer Jarvis v2.0 besitzt einen Universal Control Broker fuer Home Assistant.
+Der Broker ist bewusst kein freier Service-Call-Proxy. Jarvis darf Entities
+kennen und Steueraktionen vorbereiten, aber jede Ausfuehrung laeuft durch:
+
+1. feste Domain-/Action-Mappings
+2. lokale Control Policy
+3. ToolRegistry und Permission Layer
+4. ausstehende Aktion mit Bestaetigung
+5. Audit Log
+
+Es gibt keine beliebigen Home-Assistant-Servicenamen aus dem LLM und keine frei
+gebauten Service-Payloads aus Benutzereingaben. Hochriskante Geraete bleiben
+standardmaessig blockiert.
+
+Policy-Datei:
+
+```text
+app/config/home_assistant_control_policy.json
+```
+
+Beispiel fuer einen Entity-Override:
+
+```json
+{
+  "entity_overrides": {
+    "switch.hall": {
+      "enabled": true,
+      "risk": "YELLOW",
+      "friendly_name": "Flur Licht",
+      "allowed_actions": ["turn_on", "turn_off"]
+    }
+  }
+}
+```
+
+Unterstuetzte Mappings:
+
+- `light`: `turn_on`, `turn_off`, `toggle`
+- `switch`: `turn_on`, `turn_off`, `toggle`
+- `scene`: `turn_on`
+- `script`: `turn_on`
+- `automation`: `turn_on`, `turn_off`
+- `cover`: `open_cover`, `close_cover`, `stop_cover`
+- `climate`: `set_temperature`
+
+Risk-Stufen:
+
+- GELB: normale Geraetesteuerung, Bestaetigung erforderlich
+- ORANGE: erhoehte Vorsicht, Bestaetigung und Warnhinweis erforderlich
+- ROT: blockiert, PIN-Infrastruktur ist vorbereitet, aber standardmaessig nicht aktiv
+
+Batch-Aktionen sind begrenzt:
+
+```text
+HA_CONTROL_MAX_BATCH_SIZE=20
+```
+
+Lokale Endpunkte:
+
+```text
+GET  http://127.0.0.1:8001/assistant/home-assistant/control/policy
+GET  http://127.0.0.1:8001/assistant/home-assistant/control/entities
+POST http://127.0.0.1:8001/assistant/home-assistant/control/resolve
+POST http://127.0.0.1:8001/assistant/home-assistant/control/prepare
+POST http://127.0.0.1:8001/assistant/home-assistant/control/execute
+POST http://127.0.0.1:8001/assistant/home-assistant/control/batch/prepare
+POST http://127.0.0.1:8001/assistant/home-assistant/control/batch/execute
+```
+
+Beispiele:
+
+```text
+Flur Licht einschalten.
+Alle Lichter aus.
+Temperatur auf 21 Grad.
+Rollladen schließen.
+```
+
+Diese Befehle erstellen nur ausstehende Aktionen. Ausfuehrung erfolgt erst nach:
+
+```text
+Bestaetige Aktion 1.
+```
+
+## Lokales Gedächtnis
+
+Hammer Jarvis v2.1 kann explizit freigegebene Fakten, Präferenzen,
+Korrekturen, Projektwissen und Gerätezusammenhänge lokal speichern.
+Das Gedächtnis liegt als UTF-8-JSON-Datei auf diesem Rechner:
+
+```text
+MEMORY_ENABLED=true
+MEMORY_FILE=app/data/memory/memory.json
+MEMORY_REQUIRE_CONFIRMATION_FOR_SENSITIVE=true
+MEMORY_MAX_ITEMS=1000
+```
+
+Jarvis speichert nicht automatisch alles, was gesagt wird. Speicherbefehle
+müssen ausdrücklich sein, zum Beispiel:
+
+```text
+Merke dir, dass switch.hall das Flurlicht ist.
+Speichere, dass LOTTO24 unwichtig ist.
+Für die Zukunft: Projekt X nutzt lokale Tools.
+Was weißt du über switch.hall?
+Vergiss switch.hall.
+```
+
+Nicht gespeichert werden dürfen:
+
+- Passwörter
+- API Keys
+- OAuth- oder Bearer Tokens
+- Bank-Logins
+- vollständige private Dokumente
+- sicherheitskritische Geheimnisse
+
+Solche Inhalte werden blockiert. Sensible Erinnerungen können später über
+bestätigungspflichtige Aktionen behandelt werden. Gedächtnisinhalte können
+gelistet, gesucht, bearbeitet, gelöscht und exportiert werden.
+
+Lokale Endpunkte:
+
+```text
+GET    http://127.0.0.1:8001/assistant/memory/status
+GET    http://127.0.0.1:8001/assistant/memory
+GET    http://127.0.0.1:8001/assistant/memory/search?q=switch.hall
+POST   http://127.0.0.1:8001/assistant/memory
+PATCH  http://127.0.0.1:8001/assistant/memory/{id}
+DELETE http://127.0.0.1:8001/assistant/memory/{id}
+POST   http://127.0.0.1:8001/assistant/memory/export
+```
+
+Memory-Kontext kann bei freien LLM-Antworten als kurzer lokaler Kontext
+eingeblendet werden. Tool-first-Routing bleibt vorrangig. Gedächtnis kann keine
+Smart-Home-Schaltrechte vergeben und umgeht weder Control Policy noch
+Bestätigungen.
+
+## Performance Check
+
+Hammer Jarvis sammelt einfache lokale In-Memory-Metriken fuer wichtige
+Operationen. Es werden nur Operationsname, Kategorie, Dauer, Erfolg/Fehler und
+Zeitstempel gespeichert. Prompts, Tokens, Dateiinhalte, OAuth-Daten und Secrets
+werden nicht in Performance-Metriken geschrieben.
+
+Konfiguration:
+
+```text
+PERFORMANCE_METRICS_ENABLED=true
+PERFORMANCE_METRICS_MAX_ITEMS=500
+```
+
+Lokale Endpunkte:
+
+```text
+GET http://127.0.0.1:8001/assistant/performance/status
+GET http://127.0.0.1:8001/assistant/performance/benchmark
+GET http://127.0.0.1:8001/assistant/ollama/benchmark
+GET http://127.0.0.1:8001/assistant/ollama/benchmark/models
+GET http://127.0.0.1:8001/assistant/ollama/benchmark/native
+GET http://127.0.0.1:8001/assistant/ollama/benchmark/warm
+GET http://127.0.0.1:8001/assistant/ollama/performance-advice
+```
+
+`/assistant/performance/status` zeigt die letzten und langsamsten lokalen
+Operationen. `/assistant/performance/benchmark` fuehrt kleine sichere Checks
+aus: Entity-Cache-Status, kleine Dateisuche in den erlaubten Ordnern,
+Dashboard-Dateicheck, Memory-Suche und optional einen kleinen Ollama-Test.
+
+Native Ollama-Benchmarks geben keine raw `context`-Arrays aus. Sie zeigen nur
+kompakte Felder wie `measured_http_duration_ms`, `measured_total_duration_ms`,
+`ollama_total_duration_ms`, `load_duration_ms`, `eval_duration_ms`,
+`output_length`, `warning` und `cold_start_likely`.
+
+Native Benchmark-Auswahl:
+
+```text
+GET /assistant/ollama/benchmark/native?models=current
+GET /assistant/ollama/benchmark/native?models=fast
+GET /assistant/ollama/benchmark/native?models=smart
+GET /assistant/ollama/benchmark/native?models=all
+GET /assistant/ollama/benchmark/warm
+GET /assistant/ollama/benchmark/warm?model=qwen3:8b
+```
+
+`models=current` ist der Standard. Der Warm-Benchmark nutzt standardmaessig
+`OLLAMA_MODEL_FAST`, falls installiert, sonst `OLLAMA_MODEL`, und misst nur
+dieses eine Modell zweimal.
+
+Ollama/GPU-Hinweis: Hammer Jarvis erkennt hier nicht selbst, ob die GPU aktiv
+ist. Ollama entscheidet lokal anhand Installation, Treibern und Modell. Der
+Benchmark misst nur Antwortzeit und Antwortlaenge.
+
+Relevante Performance-Grenzen:
+
+```text
+HOME_ASSISTANT_TIMEOUT_SECONDS=10
+HA_ENTITY_SYNC_INTERVAL_SECONDS=300
+HA_ENTITY_SYNC_MIN_INTERVAL_SECONDS=30
+HA_ENTITY_CACHE_MAX_AGE_SECONDS=900
+
+FILE_SEARCH_MAX_RESULTS=25
+FILE_SEARCH_MAX_DEPTH=12
+FILE_SEARCH_TIMEOUT_SECONDS=20
+FILE_CONTENT_MAX_FILE_SIZE_MB=25
+FILE_CONTENT_CACHE_ENABLED=true
+FILE_CONTENT_CACHE_MAX_ITEMS=200
+FILE_CONTENT_PREVIEW_CHARS=4000
+
+WEB_SEARCH_CACHE_ENABLED=true
+WEB_SEARCH_CACHE_TTL_SECONDS=300
+WEB_FETCH_MAX_BYTES=500000
+WEB_FETCH_TIMEOUT_SECONDS=15
+
+OLLAMA_MODEL_FAST=llama3.2:3b
+OLLAMA_MODEL_SMART=qwen3:8b
+LLM_COMPLEXITY_ROUTING=false
+OLLAMA_KEEP_ALIVE=30m
+OLLAMA_HTTP_TIMEOUT_SECONDS=60
+OLLAMA_BENCHMARK_NUM_PREDICT=2
+OLLAMA_BENCHMARK_NUM_CTX=512
+OLLAMA_USE_NATIVE_API=false
+OLLAMA_WARMUP_ENABLED=true
+OLLAMA_WARMUP_ON_STARTUP=true
+
+LLM_MAX_PROMPT_MEMORY_ITEMS=8
+LLM_MAX_CONTEXT_CHARS=12000
+```
+
+Dateisuche: OneDrive- und Dokumentenordner koennen gross sein. Hammer Jarvis
+ueberspringt schwere Ordner wie `.git`, `.venv`, `node_modules`, `__pycache__`
+und versteckte Ordner. Fuer genauere PDF-Suchen sollte die Inhaltssuche mit
+konkreten Begriffen genutzt werden. Beschädigte PDFs oder OneDrive-Platzhalter
+werden strukturiert uebersprungen.
+
+Home Assistant: Der Entity Catalog vermeidet wiederholte vollständige
+`/api/states`-Abrufe. Force-Sync sollte nur bewusst genutzt werden.
+
+Dashboard: Die HUD-Daten werden periodisch aktualisiert. Entity Catalog und
+Control Broker sollten bevorzugt manuell oder mit laengeren Intervallen
+aktualisiert werden, wenn Home Assistant oder OneDrive langsam reagieren.
+
+Troubleshooting:
+
+- Langsames Ollama: kleineres Modell als `OLLAMA_MODEL_FAST` testen.
+- Langsame OneDrive-Suche: erlaubte Ordner enger setzen und `FILE_SEARCH_MAX_DEPTH` reduzieren.
+- Langsame PDF-Suche: `FILE_CONTENT_MAX_FILE_SIZE_MB` reduzieren oder gezieltere Begriffe verwenden.
+- Langsame Webrecherche: SearXNG pruefen und `WEB_SEARCH_MAX_RESULTS` niedrig halten.
+
+HA Sync: Parallele Entity-Synchronisationen werden zusammengefuehrt. Wenn
+innerhalb von `HA_ENTITY_SYNC_MIN_INTERVAL_SECONDS` bereits ein Live-Sync
+gelaufen ist, nutzt Jarvis bei `force=false` den aktuellen Cache und startet
+keinen zweiten `/api/states`-Abruf.
+
+## Ollama Performance und GPU
+
+Hammer Jarvis fuehrt das Modell nicht direkt aus. Die lokale Ollama-Installation
+entscheidet selbst, ob CPU oder GPU genutzt wird. Hammer Jarvis behauptet daher
+nicht, dass GPU-Beschleunigung aktiv ist, solange sie nicht extern beobachtet
+wurde.
+
+Pruefen kannst du die Antwortzeit so:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/assistant/ollama/benchmark
+Invoke-RestMethod http://127.0.0.1:8001/assistant/ollama/benchmark/models
+Invoke-RestMethod http://127.0.0.1:8001/assistant/ollama/performance-advice
+```
+
+Oeffne parallel den Windows Task-Manager und beobachte CPU/GPU-Last. Bei NVIDIA
+kann optional `nvidia-smi` helfen, falls es installiert ist.
+
+Empfohlene lokale Modellaufteilung:
+
+```text
+OLLAMA_MODEL_FAST=llama3.2:3b
+OLLAMA_MODEL_SMART=qwen3:8b
+LLM_COMPLEXITY_ROUTING=false
+```
+
+`LLM_COMPLEXITY_ROUTING=false` bleibt der Standard. Wenn du es aktivierst,
+koennen einfache nicht-deterministische Antworten ein kleineres Fast-Modell
+nutzen. Werkzeugbefehle wie Hauscheck, EcoFlow, Dateisuche, Web-Recherche und
+Smart-Home-Freigaben umgehen das LLM weiterhin deterministisch.
+
+Wenn `/assistant/ollama/benchmark/warm` zeigt, dass der warme native Lauf
+schnell ist, aber der OpenAI-kompatible Benchmark langsam bleibt, kann
+`OLLAMA_USE_NATIVE_API=true` sinnvoll sein. Die native API sendet `keep_alive`
+an Ollama und reduziert Overhead fuer einfache lokale Chatantworten. Werkzeug-
+und Sicherheitsrouting bleiben unveraendert.
+
+## Smart-Home-Freigaben verwalten
+
+Hammer Jarvis kann sichere Home-Assistant-Kandidaten anzeigen und daraus
+Freigabe-Aktionen vorbereiten. Dabei wird nichts geschaltet und nichts
+automatisch freigegeben.
+
+Regeln:
+
+- Kandidaten werden nur aus `light`, `switch` und `scene` gebildet.
+- Locks, Alarmanlagen, Heizung/Klima, Garagen/Tueren, Pumpen, Kameras und
+  andere kritische Domaenen bleiben blockiert.
+- Hinzufuegen und Entfernen aus der Freigabe sind gelbe Aktionen und brauchen
+  Bestaetigung.
+- Auch nach der Freigabe braucht jede Ausfuehrung weiterhin Bestaetigung.
+- Es werden keine frei eingegebenen Home-Assistant-Services ausgefuehrt.
+
+Beispiele:
+
+```text
+Zeige schaltbare Geraete.
+Welche Geraete kann ich freigeben?
+Gib Wohnzimmer Licht frei.
+Entferne Wohnzimmer Licht aus der Freigabe.
+Bestaetige Aktion 1.
+```
+
+Lokale Endpunkte:
+
+```text
+GET  http://127.0.0.1:8001/assistant/home-assistant/actions/candidates
+GET  http://127.0.0.1:8001/assistant/home-assistant/actions/allowlist
+POST http://127.0.0.1:8001/assistant/home-assistant/actions/allowlist/add
+POST http://127.0.0.1:8001/assistant/home-assistant/actions/allowlist/remove
+```
 
 Sicherheitsregeln:
 

@@ -1,4 +1,6 @@
 import os
+import time
+import threading
 from typing import Any
 from pathlib import Path
 
@@ -14,11 +16,16 @@ from app.assistant.actions.action_executor import ActionExecutor
 from app.assistant.actions.pending_action_store import pending_action_store
 from app.assistant.orchestrator import AssistantOrchestrator
 from app.assistant.llm_client import LLMClient, sanitize_identity_response
+from app.assistant.llm.native_ollama_client import NativeOllamaClient
+from app.assistant.memory.memory_classifier import MemoryClassifier
+from app.assistant.memory.memory_store import MemoryStore
+from app.assistant.performance.metrics_store import metrics_store
 from app.assistant.missions import MissionController, get_mission_definitions
 from app.assistant.priority_engine import PriorityEngine
 from app.assistant.skills.skill_registry import SkillRegistry
 from app.assistant.system_prompt import SYSTEM_PROMPT
 from app.assistant.session_state import open_best_match, open_result_by_index, session_state
+from app.assistant.tool_registry import ToolRegistry
 from app.config.personal_priority_rules import (
     add_sender_rule,
     add_subject_rule,
@@ -34,6 +41,9 @@ from app.tools.files.file_open_tool import FileOpenTool
 from app.tools.files.file_search_tool import FileSearchTool, get_file_search_status
 from app.logging_utils.audit import write_audit_log
 from app.tools.home_assistant import HomeAssistantTool
+from app.tools.home_assistant_actions import HomeAssistantActionTool
+from app.tools.home_assistant_control_broker import HomeAssistantControlBroker
+from app.tools.home_assistant_entities import HomeAssistantEntityCatalog
 from app.tools.productivity.calendar_service import CalendarService
 from app.tools.productivity.email_service import EmailService
 from app.tools.productivity.providers.gmail_provider import GmailProvider
@@ -45,6 +55,33 @@ app = FastAPI(title="Hammer Jarvis", version="0.1")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 _watcher_scheduler: Any = None
+_ha_entity_scheduler: Any = None
+_last_native_benchmark: dict[str, Any] | None = None
+_last_native_warm_benchmark: dict[str, Any] | None = None
+
+
+@app.on_event("startup")
+def start_ollama_warmup() -> None:
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return
+    if os.getenv("OLLAMA_WARMUP_ENABLED", "false").strip().lower() != "true":
+        return
+    if os.getenv("OLLAMA_WARMUP_ON_STARTUP", "false").strip().lower() != "true":
+        return
+
+    def warmup() -> None:
+        try:
+            llm = LLMClient()
+            if llm.provider_name() != "ollama" or not llm.is_available():
+                return
+            native = NativeOllamaClient()
+            model = llm.fast_model_name() if native.is_model_installed(llm.fast_model_name()) else llm.model_name()
+            response = native.benchmark_model(model)
+            write_audit_log("ollama_warmup", {"duration_ms": response.get("duration_ms"), "model": model})
+        except Exception:
+            write_audit_log("ollama_warmup_failed", {})
+
+    threading.Thread(target=warmup, daemon=True).start()
 
 
 @app.on_event("startup")
@@ -66,12 +103,42 @@ def start_watcher_scheduler() -> None:
     _watcher_scheduler = scheduler
 
 
+@app.on_event("startup")
+def start_ha_entity_scheduler() -> None:
+    global _ha_entity_scheduler
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return
+    if os.getenv("HA_ENTITY_SYNC_ENABLED", "true").strip().lower() != "true":
+        return
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+    except Exception:
+        write_audit_log("ha_entity_sync_scheduler_unavailable", {})
+        return
+    interval = int(os.getenv("HA_ENTITY_SYNC_INTERVAL_SECONDS", "300"))
+
+    def sync_job() -> None:
+        try:
+            result = HomeAssistantEntityCatalog().sync_entities(force=True)
+            write_audit_log("ha_entity_sync", {"entity_count": result.get("entity_count", 0), "source": result.get("source")})
+        except Exception:
+            write_audit_log("ha_entity_sync_failed", {})
+
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(sync_job, "interval", seconds=interval)
+    scheduler.start()
+    _ha_entity_scheduler = scheduler
+
+
 @app.on_event("shutdown")
 def stop_watcher_scheduler() -> None:
-    global _watcher_scheduler
+    global _watcher_scheduler, _ha_entity_scheduler
     if _watcher_scheduler is not None:
         _watcher_scheduler.shutdown(wait=False)
         _watcher_scheduler = None
+    if _ha_entity_scheduler is not None:
+        _ha_entity_scheduler.shutdown(wait=False)
+        _ha_entity_scheduler = None
 
 
 class ChatRequest(BaseModel):
@@ -112,8 +179,71 @@ class PersonalPriorityRemoveRequest(BaseModel):
     match: str = Field(min_length=1)
 
 
+class MemoryCreateRequest(BaseModel):
+    type: str = "fact"
+    key: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    tags: list[str] = []
+    source: str = "user"
+    confidence: str = "high"
+    protected: bool = False
+
+
+class MemoryPatchRequest(BaseModel):
+    type: str | None = None
+    key: str | None = None
+    value: str | None = None
+    tags: list[str] | None = None
+    confidence: str | None = None
+    protected: bool | None = None
+
+
 class EntityActionRequest(BaseModel):
     entity_id: str = Field(min_length=1)
+    confirm: bool = False
+
+
+class HomeAssistantAllowlistAddRequest(BaseModel):
+    entity_id: str = Field(min_length=1)
+    friendly_name: str = ""
+    domain: str = Field(min_length=1)
+    allowed_actions: list[str] = []
+    confirm: bool = False
+
+
+class HomeAssistantAllowlistRemoveRequest(BaseModel):
+    entity_id: str = Field(min_length=1)
+    confirm: bool = False
+
+
+class HomeAssistantEntitySyncRequest(BaseModel):
+    force: bool = False
+
+
+class HomeAssistantControlResolveRequest(BaseModel):
+    command: str = Field(min_length=1)
+
+
+class HomeAssistantControlPrepareRequest(BaseModel):
+    entity_id: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    parameters: dict[str, Any] | None = None
+
+
+class HomeAssistantControlExecuteRequest(BaseModel):
+    entity_id: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    parameters: dict[str, Any] | None = None
+    confirm: bool = False
+
+
+class HomeAssistantBatchPrepareRequest(BaseModel):
+    domain: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+
+
+class HomeAssistantBatchExecuteRequest(BaseModel):
+    actions: list[dict[str, Any]]
     confirm: bool = False
 
 
@@ -228,8 +358,169 @@ def assistant_chat(request: AssistantChatRequest) -> dict[str, Any]:
 
 @app.get("/assistant/actions/pending")
 def assistant_actions_pending() -> dict[str, Any]:
-    actions = pending_action_store.list_pending_actions()
+    actions = pending_action_store.present_actions(pending_action_store.list_pending_actions(), source="dashboard")
     return {"count": len(actions), "actions": actions}
+
+
+@app.get("/assistant/home-assistant/actions/allowed")
+def assistant_home_assistant_allowed_actions() -> dict[str, Any]:
+    return HomeAssistantActionTool().list_allowed_actions()
+
+
+@app.get("/assistant/home-assistant/actions/candidates")
+def assistant_home_assistant_action_candidates() -> dict[str, Any]:
+    return HomeAssistantActionTool().discover_actionable_entities()
+
+
+@app.get("/assistant/home-assistant/actions/allowlist")
+def assistant_home_assistant_action_allowlist() -> dict[str, Any]:
+    return HomeAssistantActionTool().list_allowed_actions()
+
+
+@app.post("/assistant/home-assistant/actions/allowlist/add")
+def assistant_home_assistant_action_allowlist_add(request: HomeAssistantAllowlistAddRequest) -> dict[str, Any]:
+    arguments = {
+        "entity_id": request.entity_id,
+        "friendly_name": request.friendly_name or request.entity_id,
+        "domain": request.domain,
+        "allowed_actions": request.allowed_actions,
+    }
+    if request.confirm:
+        return ToolRegistry().execute_tool("home_assistant_add_to_allowlist", arguments, confirm=True)
+    action = pending_action_store.create_action(
+        {
+            "title": f"{request.friendly_name or request.entity_id} zur Smart-Home-Freigabe hinzufügen",
+            "description": "Änderung an der Smart-Home-Freigabe. Ausführung erst nach Bestätigung.",
+            "tool_name": "home_assistant_add_to_allowlist",
+            "arguments": arguments,
+            "risk": "YELLOW",
+            "source": "home_assistant_allowlist_api",
+            "requires_confirmation": True,
+        }
+    )
+    return {"pending": True, "action": action, "message": "Freigabeänderung wurde als gelbe Aktion vorbereitet."}
+
+
+@app.post("/assistant/home-assistant/actions/allowlist/remove")
+def assistant_home_assistant_action_allowlist_remove(request: HomeAssistantAllowlistRemoveRequest) -> dict[str, Any]:
+    arguments = {"entity_id": request.entity_id}
+    if request.confirm:
+        return ToolRegistry().execute_tool("home_assistant_remove_from_allowlist", arguments, confirm=True)
+    action = pending_action_store.create_action(
+        {
+            "title": f"{request.entity_id} aus Smart-Home-Freigabe entfernen",
+            "description": "Änderung an der Smart-Home-Freigabe. Ausführung erst nach Bestätigung.",
+            "tool_name": "home_assistant_remove_from_allowlist",
+            "arguments": arguments,
+            "risk": "YELLOW",
+            "source": "home_assistant_allowlist_api",
+            "requires_confirmation": True,
+        }
+    )
+    return {"pending": True, "action": action, "message": "Freigabeänderung wurde als gelbe Aktion vorbereitet."}
+
+
+@app.get("/assistant/home-assistant/entities/status")
+def assistant_home_assistant_entities_status() -> dict[str, Any]:
+    return HomeAssistantEntityCatalog().status()
+
+
+@app.post("/assistant/home-assistant/entities/sync")
+def assistant_home_assistant_entities_sync(request: HomeAssistantEntitySyncRequest | None = None) -> dict[str, Any]:
+    force = bool(request.force) if request else False
+    return HomeAssistantEntityCatalog().sync_entities(force=force)
+
+
+@app.get("/assistant/home-assistant/entities")
+def assistant_home_assistant_entities(
+    domain: str | None = None,
+    state: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+) -> dict[str, Any]:
+    return HomeAssistantEntityCatalog().list_entities(domain=domain, state=state, limit=limit)
+
+
+@app.get("/assistant/home-assistant/entities/search")
+def assistant_home_assistant_entities_search(
+    q: str = Query(..., min_length=1),
+    domain: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+) -> dict[str, Any]:
+    return HomeAssistantEntityCatalog().search_entities(query=q, domain=domain, limit=limit)
+
+
+@app.get("/assistant/home-assistant/entities/unavailable")
+def assistant_home_assistant_entities_unavailable(limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
+    return HomeAssistantEntityCatalog().list_unavailable_entities(limit=limit)
+
+
+@app.get("/assistant/home-assistant/entities/actionable-candidates")
+def assistant_home_assistant_entities_actionable_candidates(limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
+    return HomeAssistantEntityCatalog().list_actionable_candidates(limit=limit)
+
+
+@app.get("/assistant/home-assistant/entities/{entity_id}")
+def assistant_home_assistant_entity(entity_id: str) -> dict[str, Any]:
+    return HomeAssistantEntityCatalog().get_entity(entity_id)
+
+
+@app.get("/assistant/home-assistant/control/policy")
+def assistant_home_assistant_control_policy() -> dict[str, Any]:
+    return HomeAssistantControlBroker().list_control_policy()
+
+
+@app.get("/assistant/home-assistant/control/auto-policy")
+def assistant_home_assistant_control_auto_policy() -> dict[str, Any]:
+    return HomeAssistantControlBroker().list_auto_policy()
+
+
+@app.post("/assistant/home-assistant/control/auto-policy/reload")
+def assistant_home_assistant_control_auto_policy_reload() -> dict[str, Any]:
+    policy = HomeAssistantControlBroker().list_auto_policy()
+    return {"reloaded": True, **policy}
+
+
+@app.get("/assistant/home-assistant/control/trusted-switches")
+def assistant_home_assistant_control_trusted_switches() -> dict[str, Any]:
+    return HomeAssistantControlBroker().list_trusted_switches()
+
+
+@app.get("/assistant/home-assistant/control/entities")
+def assistant_home_assistant_control_entities(domain: str | None = None) -> dict[str, Any]:
+    return HomeAssistantControlBroker().list_controllable_entities(domain=domain)
+
+
+@app.post("/assistant/home-assistant/control/resolve")
+def assistant_home_assistant_control_resolve(request: HomeAssistantControlResolveRequest) -> dict[str, Any]:
+    return HomeAssistantControlBroker().resolve_control_intent(request.command)
+
+
+@app.post("/assistant/home-assistant/control/prepare")
+def assistant_home_assistant_control_prepare(request: HomeAssistantControlPrepareRequest) -> dict[str, Any]:
+    return HomeAssistantControlBroker().prepare_control_action(
+        request.entity_id,
+        request.action,
+        request.parameters or {},
+    )
+
+
+@app.post("/assistant/home-assistant/control/execute")
+def assistant_home_assistant_control_execute(request: HomeAssistantControlExecuteRequest) -> dict[str, Any]:
+    if not request.confirm:
+        return {"confirmation_required": True, "message": "Diese Home-Assistant-Aktion benötigt Bestätigung."}
+    return HomeAssistantControlBroker().execute_control_action(request.entity_id, request.action, request.parameters or {})
+
+
+@app.post("/assistant/home-assistant/control/batch/prepare")
+def assistant_home_assistant_control_batch_prepare(request: HomeAssistantBatchPrepareRequest) -> dict[str, Any]:
+    return HomeAssistantControlBroker().prepare_batch_action(request.domain, request.action)
+
+
+@app.post("/assistant/home-assistant/control/batch/execute")
+def assistant_home_assistant_control_batch_execute(request: HomeAssistantBatchExecuteRequest) -> dict[str, Any]:
+    if not request.confirm:
+        return {"confirmation_required": True, "message": "Diese Home-Assistant-Batch-Aktion benötigt Bestätigung."}
+    return HomeAssistantControlBroker().execute_batch_action(request.actions)
 
 
 @app.post("/assistant/actions/{action_id}/execute")
@@ -554,17 +845,41 @@ def assistant_ollama_status() -> dict[str, Any]:
     llm = LLMClient()
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     tags_url = base_url.replace("/v1", "") + "/api/tags"
-    model = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+    model = llm.model_name()
+    fast_model = llm.fast_model_name()
+    smart_model = llm.smart_model_name()
     try:
         response = requests.get(tags_url, timeout=3)
         response.raise_for_status()
         models = response.json().get("models", [])
-        installed = any(item.get("name") == model for item in models)
+        installed_names = [str(item.get("name", "")) for item in models if item.get("name")]
+        installed_model = next((item for item in models if item.get("name") == model), None)
+        installed = installed_model is not None
+        fast_installed = fast_model in installed_names
+        smart_installed = smart_model in installed_names
         return {
             "provider": "ollama",
             "reachable": True,
             "model": model,
+            "main_model": model,
+            "fast_model": fast_model,
+            "smart_model": smart_model,
             "base_url": base_url,
+            "installed_models": installed_names,
+            "configured_model_installed": installed,
+            "configured_model_size_bytes": installed_model.get("size") if installed_model else None,
+            "fast_model_installed": fast_installed,
+            "smart_model_installed": smart_installed,
+            "current_model_installed": installed,
+            "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30m"),
+            "warmup_enabled": os.getenv("OLLAMA_WARMUP_ENABLED", "true").strip().lower() == "true",
+            "warmup_on_startup": os.getenv("OLLAMA_WARMUP_ON_STARTUP", "true").strip().lower() == "true",
+            "native_api_enabled": llm.native_ollama_enabled(),
+            "last_benchmark": _last_native_benchmark,
+            "complexity_routing_enabled": llm.complexity_routing_enabled(),
+            "routing_mode": "complexity" if llm.complexity_routing_enabled() else "main_model",
+            "benchmark_warning": None,
+            "gpu_note": "GPU-Nutzung bitte mit `ollama ps` pruefen.",
             "message": (
                 "Ollama ist erreichbar und das Modell ist installiert."
                 if installed
@@ -576,9 +891,361 @@ def assistant_ollama_status() -> dict[str, Any]:
             "provider": "ollama",
             "reachable": False,
             "model": model,
+            "main_model": model,
+            "fast_model": fast_model,
+            "smart_model": smart_model,
             "base_url": base_url,
+            "installed_models": [],
+            "configured_model_installed": False,
+            "configured_model_size_bytes": None,
+            "fast_model_installed": False,
+            "smart_model_installed": False,
+            "current_model_installed": False,
+            "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30m"),
+            "warmup_enabled": os.getenv("OLLAMA_WARMUP_ENABLED", "true").strip().lower() == "true",
+            "warmup_on_startup": os.getenv("OLLAMA_WARMUP_ON_STARTUP", "true").strip().lower() == "true",
+            "native_api_enabled": llm.native_ollama_enabled(),
+            "last_benchmark": _last_native_benchmark,
+            "complexity_routing_enabled": llm.complexity_routing_enabled(),
+            "routing_mode": "complexity" if llm.complexity_routing_enabled() else "main_model",
+            "gpu_note": "GPU-Nutzung bitte mit `ollama ps` pruefen.",
             "message": "Ollama ist nicht erreichbar. Bitte starte Ollama und pruefe http://localhost:11434.",
         }
+
+
+@app.get("/assistant/ollama/benchmark")
+def assistant_ollama_benchmark() -> dict[str, Any]:
+    llm = LLMClient()
+    started = time.perf_counter()
+    if llm.provider_name() != "ollama" or not llm.is_available():
+        return {
+            "provider": "ollama",
+            "available": False,
+            "reachable": False,
+            "model": llm.model_name(),
+            "duration_ms": 0,
+            "response_time_ms": 0,
+            "response_length": 0,
+            "output_length": 0,
+            "message": "Ollama ist nicht als lokaler LLM-Provider verfuegbar.",
+        }
+    try:
+        response = llm.create_response_with_tools(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": "Antworte nur mit: OK"},
+            ],
+            [],
+        )
+        text = str(response.get("text") or "")
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return {
+            "provider": "ollama",
+            "available": True,
+            "reachable": True,
+            "model": llm.model_name(),
+            "duration_ms": elapsed_ms,
+            "response_time_ms": elapsed_ms,
+            "response_length": len(text),
+            "output_length": len(text),
+            "warning": "Ollama antwortet langsam." if elapsed_ms > 5000 else None,
+            "message": "Kurzer Ollama-Benchmark abgeschlossen.",
+        }
+    except Exception:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return {
+            "provider": "ollama",
+            "available": False,
+            "reachable": False,
+            "model": llm.model_name(),
+            "duration_ms": elapsed_ms,
+            "response_time_ms": elapsed_ms,
+            "response_length": 0,
+            "output_length": 0,
+            "message": "Ollama-Benchmark fehlgeschlagen. Bitte pruefe Ollama und das konfigurierte Modell.",
+        }
+
+
+@app.get("/assistant/ollama/benchmark/models")
+def assistant_ollama_benchmark_models() -> dict[str, Any]:
+    llm = LLMClient()
+    status = assistant_ollama_status()
+    installed = set(status.get("installed_models") or [])
+    configured = []
+    for model in (llm.fast_model_name(), llm.smart_model_name(), llm.model_name()):
+        if model and model not in configured:
+            configured.append(model)
+    benchmarks: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    if not status.get("reachable"):
+        return {
+            "provider": "ollama",
+            "reachable": False,
+            "benchmarks": [],
+            "skipped_models": [{"model": model, "reason": "ollama_unreachable"} for model in configured],
+            "message": "Ollama ist nicht erreichbar. Bitte starte Ollama und pruefe http://localhost:11434.",
+        }
+    for model in configured:
+        if model not in installed:
+            skipped.append({"model": model, "reason": "not_installed"})
+            continue
+        started = time.perf_counter()
+        try:
+            response = llm.create_response_with_tools(
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": "Antworte nur mit: OK"},
+                ],
+                [],
+                model=model,
+            )
+            text = str(response.get("text") or "")
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            benchmarks.append(
+                {
+                    "model": model,
+                    "duration_ms": elapsed_ms,
+                    "reachable": True,
+                    "output_length": len(text),
+                    "warning": _ollama_speed_warning(model, elapsed_ms),
+                }
+            )
+        except Exception:
+            benchmarks.append(
+                {
+                    "model": model,
+                    "duration_ms": int((time.perf_counter() - started) * 1000),
+                    "reachable": False,
+                    "output_length": 0,
+                    "warning": "Benchmark fehlgeschlagen.",
+                }
+            )
+    return {
+        "provider": "ollama",
+        "reachable": True,
+        "benchmarks": benchmarks,
+        "skipped_models": skipped,
+        "message": "Ollama-Modellbenchmark abgeschlossen.",
+    }
+
+
+@app.get("/assistant/ollama/benchmark/native")
+def assistant_ollama_benchmark_native(models: str = Query("current", pattern="^(current|fast|smart|all)$")) -> dict[str, Any]:
+    global _last_native_benchmark
+    llm = LLMClient()
+    native = NativeOllamaClient()
+    models_data = native.list_models()
+    installed = set(models_data.get("installed_models") or [])
+    benchmarks: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    if not models_data.get("reachable"):
+        return {
+            "provider": "ollama",
+            "reachable": False,
+            "benchmarks": [],
+            "skipped_models": [{"model": model, "reason": "ollama_unreachable"} for model in _selected_ollama_models(llm, models)],
+            "message": "Ollama ist nicht erreichbar.",
+        }
+    for model in _selected_ollama_models(llm, models):
+        if model not in installed:
+            skipped.append({"model": model, "reason": "not_installed"})
+            continue
+        result = _sanitize_benchmark_result(native.benchmark_model(model))
+        result["warning"] = result.get("warning") or _ollama_speed_warning(model, int(result.get("duration_ms") or 0))
+        result["cold_start_likely"] = _cold_start_likely(result)
+        benchmarks.append(result)
+    response = {
+        "provider": "ollama",
+        "reachable": True,
+        "benchmarks": benchmarks,
+        "skipped_models": skipped,
+        "message": "Native Ollama-Benchmarks abgeschlossen.",
+    }
+    _last_native_benchmark = response
+    return response
+
+
+@app.get("/assistant/ollama/benchmark/warm")
+def assistant_ollama_benchmark_warm(model: str | None = None) -> dict[str, Any]:
+    global _last_native_warm_benchmark
+    llm = LLMClient()
+    native = NativeOllamaClient()
+    models_data = native.list_models()
+    installed = set(models_data.get("installed_models") or [])
+    if not models_data.get("reachable"):
+        return {"provider": "ollama", "reachable": False, "message": "Ollama ist nicht erreichbar."}
+    selected_model = model or (llm.fast_model_name() if llm.fast_model_name() in installed else llm.model_name())
+    if selected_model not in installed:
+        return {"provider": "ollama", "reachable": True, "model": selected_model, "message": "Kein konfiguriertes Modell ist installiert."}
+    cold = _sanitize_benchmark_result(native.benchmark_model(selected_model))
+    warm = _sanitize_benchmark_result(native.benchmark_model(selected_model))
+    response = {
+        "provider": "ollama",
+        "reachable": True,
+        "model": selected_model,
+        "cold_result": {**cold, "cold_start_likely": _cold_start_likely(cold)},
+        "warm_result": {**warm, "cold_start_likely": _cold_start_likely(warm)},
+        "interpretation": _interpret_warm_benchmark(cold, warm),
+    }
+    _last_native_warm_benchmark = response
+    return response
+
+
+@app.get("/assistant/ollama/performance-advice")
+def assistant_ollama_performance_advice() -> dict[str, Any]:
+    status = assistant_ollama_status()
+    llm = LLMClient()
+    advice = [
+        "Hammer Jarvis fuehrt das Modell nicht direkt aus. Ollama entscheidet lokal ueber CPU/GPU-Nutzung.",
+        "Pruefe waehrend eines Benchmarks im Windows Task-Manager die GPU-Auslastung.",
+        "Bei NVIDIA kann nvidia-smi helfen, falls es installiert ist.",
+    ]
+    if status.get("reachable") and not status.get("fast_model_installed"):
+        advice.append(
+            f"Das schnelle Modell {llm.fast_model_name()} ist nicht installiert. "
+            "Installiere ein kleines Modell, wenn kurze Antworten schneller werden sollen."
+        )
+    if _last_native_warm_benchmark:
+        cold = _last_native_warm_benchmark.get("cold_result", {})
+        warm = _last_native_warm_benchmark.get("warm_result", {})
+        if _cold_slow_warm_fast(cold, warm):
+            advice.append("Cold Start ist das Hauptproblem. OLLAMA_KEEP_ALIVE und Warmup helfen.")
+            if not llm.native_ollama_enabled():
+                advice.append("Native Ollama-Benchmarks sind warm schnell. Setze bei Bedarf OLLAMA_USE_NATIVE_API=true.")
+        elif int(warm.get("duration_ms") or 0) > 4000:
+            advice.append("Auch der warme Benchmark ist langsam. Pruefe GPU/VRAM/Treiber oder teste llama3.2:1b.")
+    for benchmark in (_last_native_benchmark or {}).get("benchmarks", []):
+        measured = int(benchmark.get("measured_http_duration_ms") or benchmark.get("measured_total_duration_ms") or 0)
+        ollama_duration = int(benchmark.get("ollama_total_duration_ms") or benchmark.get("total_duration_ms") or 0)
+        if measured > ollama_duration + 1000:
+            advice.append(
+                "Jarvis misst noch deutlichen Overhead gegenueber Ollama. "
+                "Pruefe NativeOllamaClient, HTTP-Client und Benchmark-Messbereich."
+            )
+            break
+    if not llm.complexity_routing_enabled():
+        advice.append("LLM_COMPLEXITY_ROUTING ist deaktiviert. Standardmaessig wird das Hauptmodell genutzt.")
+    if status.get("fast_model_installed") and not _last_native_warm_benchmark:
+        advice.append("Fuer eine konkrete Diagnose fuehre /assistant/ollama/benchmark/warm aus.")
+    return {
+        "provider": "ollama",
+        "reachable": bool(status.get("reachable")),
+        "main_model": llm.model_name(),
+        "fast_model": llm.fast_model_name(),
+        "smart_model": llm.smart_model_name(),
+        "fast_model_installed": bool(status.get("fast_model_installed")),
+        "smart_model_installed": bool(status.get("smart_model_installed")),
+        "complexity_routing_enabled": llm.complexity_routing_enabled(),
+        "native_api_enabled": llm.native_ollama_enabled(),
+        "advice": advice,
+    }
+
+
+@app.get("/assistant/performance/status")
+def assistant_performance_status() -> dict[str, Any]:
+    return metrics_store.status()
+
+
+@app.get("/assistant/performance/benchmark")
+def assistant_performance_benchmark() -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+
+    def run_check(name: str, category: str, fn: Any) -> None:
+        started = time.perf_counter()
+        try:
+            result = fn()
+            checks.append({"name": name, "category": category, "duration_ms": int((time.perf_counter() - started) * 1000), "success": True, "result": result})
+        except Exception as exc:
+            checks.append({"name": name, "category": category, "duration_ms": int((time.perf_counter() - started) * 1000), "success": False, "error": exc.__class__.__name__})
+
+    run_check("entity_cache_status", "home_assistant", lambda: HomeAssistantEntityCatalog().status())
+    def small_export_search() -> dict[str, Any]:
+        previous = os.getenv("FILE_SEARCH_ALLOWED_DIRS")
+        os.environ["FILE_SEARCH_ALLOWED_DIRS"] = str(Path(os.getenv("EXPORT_DIR", "workspace/exports")))
+        try:
+            return FileSearchTool().search_files("hauscheck", limit=3)
+        finally:
+            if previous is None:
+                os.environ.pop("FILE_SEARCH_ALLOWED_DIRS", None)
+            else:
+                os.environ["FILE_SEARCH_ALLOWED_DIRS"] = previous
+
+    run_check("small_file_search", "file_search", small_export_search)
+    run_check("dashboard_route", "dashboard", lambda: {"route": "/dashboard", "exists": (STATIC_DIR / "dashboard.html").exists()})
+    run_check("memory_search", "memory", lambda: MemoryStore().search_memory("hammer", limit=3))
+    if LLMClient().provider_name() == "ollama" and LLMClient().is_available():
+        run_check("ollama_tiny_prompt", "llm", lambda: assistant_ollama_benchmark())
+    return {"checks": checks, "summary": {"count": len(checks), "errors": sum(1 for check in checks if not check["success"])}}
+
+
+def _ollama_speed_warning(model: str, duration_ms: int) -> str | None:
+    if duration_ms <= 4000:
+        return None
+    if model == os.getenv("OLLAMA_MODEL_SMART", os.getenv("OLLAMA_MODEL", "qwen3:8b")):
+        return (
+            "qwen3:8b ist fuer kurze Antworten langsam. Fuer schnelle "
+            "Alltagsantworten kann ein kleineres Modell als OLLAMA_MODEL_FAST genutzt werden."
+        )
+    return "Dieses Modell antwortet langsam."
+
+
+def _configured_ollama_models(llm: LLMClient) -> list[str]:
+    models: list[str] = []
+    for model in (llm.model_name(), llm.fast_model_name(), llm.smart_model_name()):
+        if model and model not in models:
+            models.append(model)
+    return models
+
+
+def _selected_ollama_models(llm: LLMClient, selection: str) -> list[str]:
+    if selection == "fast":
+        return [llm.fast_model_name()]
+    if selection == "smart":
+        return [llm.smart_model_name()]
+    if selection == "all":
+        return _configured_ollama_models(llm)
+    return [llm.model_name()]
+
+
+def _sanitize_benchmark_result(result: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "model",
+        "text",
+        "output_length",
+        "done",
+        "done_reason",
+        "total_duration_ms",
+        "load_duration_ms",
+        "prompt_eval_duration_ms",
+        "eval_duration_ms",
+        "ollama_total_duration_ms",
+        "prompt_eval_count",
+        "eval_count",
+        "measured_http_duration_ms",
+        "measured_total_duration_ms",
+        "duration_ms",
+        "warning",
+        "cold_start_likely",
+    }
+    return {key: result[key] for key in allowed if key in result}
+
+
+def _cold_start_likely(result: dict[str, Any]) -> bool:
+    duration = int(result.get("duration_ms") or result.get("total_duration_ms") or 0)
+    load = int(result.get("load_duration_ms") or 0)
+    return duration > 1000 and load > 0 and load >= int(duration * 0.5)
+
+
+def _cold_slow_warm_fast(cold: dict[str, Any], warm: dict[str, Any]) -> bool:
+    return int(cold.get("duration_ms") or 0) > 4000 and int(warm.get("duration_ms") or 0) <= 1500
+
+
+def _interpret_warm_benchmark(cold: dict[str, Any], warm: dict[str, Any]) -> str:
+    if _cold_slow_warm_fast(cold, warm):
+        return "Cold Start ist das Hauptproblem. keep_alive/warmup hilft."
+    if int(cold.get("duration_ms") or 0) > 4000 and int(warm.get("duration_ms") or 0) > 4000:
+        return "Ollama selbst ist trotz GPU langsam oder Hardware/VRAM ist begrenzt."
+    return "Lokale LLM-Performance ist nutzbar."
 
 
 @app.get("/assistant/providers")
@@ -594,6 +1261,52 @@ def assistant_providers() -> dict[str, Any]:
             "timetree": "limited",
         },
     }
+
+
+@app.get("/assistant/memory/status")
+def assistant_memory_status() -> dict[str, Any]:
+    store = MemoryStore()
+    data = store.list_memory(limit=1_000_000)
+    return {
+        "enabled": os.getenv("MEMORY_ENABLED", "true").strip().lower() == "true",
+        "count": data.get("count", 0),
+        "file": str(store.path),
+        "file_exists": store.path.exists(),
+    }
+
+
+@app.get("/assistant/memory")
+def assistant_memory_list(type: str | None = None, tag: str | None = None, limit: int = Query(100, ge=1, le=1000)) -> dict[str, Any]:
+    return MemoryStore().list_memory(type=type, tag=tag, limit=limit)
+
+
+@app.get("/assistant/memory/search")
+def assistant_memory_search(q: str = Query(..., min_length=1), limit: int = Query(10, ge=1, le=100)) -> dict[str, Any]:
+    return MemoryStore().search_memory(q, limit=limit)
+
+
+@app.post("/assistant/memory")
+def assistant_memory_create(request: MemoryCreateRequest) -> dict[str, Any]:
+    classification = MemoryClassifier().classify_text(f"{request.key} {request.value}")
+    if classification.get("blocked"):
+        return classification
+    return MemoryStore().add_memory(request.model_dump())
+
+
+@app.patch("/assistant/memory/{memory_id}")
+def assistant_memory_update(memory_id: str, request: MemoryPatchRequest) -> dict[str, Any]:
+    patch = {key: value for key, value in request.model_dump().items() if value is not None}
+    return MemoryStore().update_memory(memory_id, patch)
+
+
+@app.delete("/assistant/memory/{memory_id}")
+def assistant_memory_delete(memory_id: str) -> dict[str, Any]:
+    return MemoryStore().delete_memory(memory_id)
+
+
+@app.post("/assistant/memory/export")
+def assistant_memory_export() -> dict[str, Any]:
+    return MemoryStore().export_memory()
 
 
 @app.get("/assistant/calendar/today")

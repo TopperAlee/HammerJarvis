@@ -6,6 +6,7 @@ from datetime import datetime
 from app.agent.permissions import ActionRisk
 from app.assistant.schemas import RegisteredTool
 from app.assistant.session_state import open_best_match, open_result_by_index
+from app.assistant.memory.memory_store import MemoryStore
 from app.logging_utils.audit import write_audit_log
 from app.tools.files.content_search_tool import ContentSearchTool
 from app.tools.files.file_creator import FileCreatorTool
@@ -13,6 +14,9 @@ from app.tools.files.file_inspect_tool import FileInspectTool
 from app.tools.files.file_open_tool import FileOpenTool
 from app.tools.files.file_search_tool import FileSearchTool
 from app.tools.home_assistant import HomeAssistantTool
+from app.tools.home_assistant_actions import HomeAssistantActionTool
+from app.tools.home_assistant_control_broker import HomeAssistantControlBroker
+from app.tools.home_assistant_entities import HomeAssistantEntityCatalog
 from app.tools.productivity.calendar_service import CalendarService
 from app.tools.productivity.email_service import EmailService
 from app.tools.productivity.providers.gmail_provider import GmailProvider
@@ -45,7 +49,7 @@ class ToolRegistry:
         )
         if tool.risk == ActionRisk.RED:
             return {"tool": name, "risk": tool.risk, "blocked": True}
-        if tool.risk == ActionRisk.YELLOW and not confirm:
+        if tool.risk in {ActionRisk.YELLOW, ActionRisk.ORANGE} and not confirm:
             return {
                 "tool": name,
                 "risk": tool.risk,
@@ -128,6 +132,9 @@ class ToolRegistry:
 
     def _register_defaults(self) -> None:
         ha_tool = HomeAssistantTool()
+        ha_action_tool = HomeAssistantActionTool()
+        ha_entity_catalog = HomeAssistantEntityCatalog()
+        ha_control_broker = HomeAssistantControlBroker()
         email_service = EmailService()
         calendar_service = CalendarService()
         timetree_provider = TimeTreeProvider()
@@ -138,6 +145,7 @@ class ToolRegistry:
         file_inspect = FileInspectTool()
         file_open = FileOpenTool()
         web_research = WebResearchTool()
+        memory_store = MemoryStore()
 
         self.register(
             "home_assistant_get_problems",
@@ -154,6 +162,158 @@ class ToolRegistry:
             ha_tool.get_ecoflow_energy_overview,
             {},
             False,
+        )
+        self.register(
+            "home_assistant_list_allowed_actions",
+            "Listet freigegebene Home-Assistant-Aktionen.",
+            ActionRisk.GREEN,
+            ha_action_tool.list_allowed_actions,
+            {},
+            False,
+        )
+        self.register(
+            "home_assistant_discover_actionable_entities",
+            "Findet sichere Home-Assistant-Kandidaten fuer die Freigabe.",
+            ActionRisk.GREEN,
+            ha_action_tool.discover_actionable_entities,
+            {},
+            False,
+        )
+        self.register(
+            "home_assistant_prepare_action",
+            "Prueft eine Home-Assistant-Aktion gegen die lokale Allowlist.",
+            ActionRisk.GREEN,
+            ha_action_tool.prepare_home_assistant_action,
+            {"entity_name_or_id": "string", "action": "string"},
+            False,
+        )
+        self.register(
+            "home_assistant_execute_action",
+            "Fuehrt eine freigegebene Home-Assistant-Aktion nach Bestaetigung aus.",
+            ActionRisk.YELLOW,
+            ha_action_tool.execute_home_assistant_action,
+            {"entity_id": "string", "action": "string"},
+            True,
+        )
+        self.register(
+            "home_assistant_add_to_allowlist",
+            "Fuegt eine sichere Entity nach Bestaetigung zur Smart-Home-Freigabe hinzu.",
+            ActionRisk.YELLOW,
+            ha_action_tool.add_to_allowlist,
+            {"entity_id": "string", "friendly_name": "string", "domain": "string", "allowed_actions": "list"},
+            True,
+        )
+        self.register(
+            "home_assistant_remove_from_allowlist",
+            "Entfernt eine Entity nach Bestaetigung aus der Smart-Home-Freigabe.",
+            ActionRisk.YELLOW,
+            ha_action_tool.remove_from_allowlist,
+            {"entity_id": "string"},
+            True,
+        )
+        self.register(
+            "home_assistant_sync_entities",
+            "Synchronisiert den lokalen Home-Assistant-Entity-Katalog read-only.",
+            ActionRisk.GREEN,
+            ha_entity_catalog.sync_entities,
+            {"force": "boolean"},
+            False,
+        )
+        self.register(
+            "home_assistant_list_entities",
+            "Listet Entities aus dem lokalen Home-Assistant-Entity-Katalog.",
+            ActionRisk.GREEN,
+            ha_entity_catalog.list_entities,
+            {"domain": "string", "state": "string", "limit": "integer"},
+            False,
+        )
+        self.register(
+            "home_assistant_search_entities",
+            "Sucht Entities im lokalen Home-Assistant-Entity-Katalog.",
+            ActionRisk.GREEN,
+            ha_entity_catalog.search_entities,
+            {"query": "string", "domain": "string", "limit": "integer"},
+            False,
+        )
+        self.register(
+            "home_assistant_list_unavailable_entities",
+            "Listet unavailable Entities aus dem lokalen Home-Assistant-Entity-Katalog.",
+            ActionRisk.GREEN,
+            ha_entity_catalog.list_unavailable_entities,
+            {"limit": "integer"},
+            False,
+        )
+        self.register(
+            "home_assistant_list_actionable_candidates",
+            "Listet potenziell freigebbare Home-Assistant-Entities ohne Rechte zu vergeben.",
+            ActionRisk.GREEN,
+            ha_entity_catalog.list_actionable_candidates,
+            {"limit": "integer"},
+            False,
+        )
+        self.register(
+            "home_assistant_get_entity",
+            "Liest Details zu einer Entity aus dem lokalen Home-Assistant-Entity-Katalog.",
+            ActionRisk.GREEN,
+            ha_entity_catalog.get_entity,
+            {"entity_id": "string"},
+            False,
+        )
+        self.register(
+            "home_assistant_control_policy",
+            "Listet die lokale Home-Assistant-Control-Policy.",
+            ActionRisk.GREEN,
+            ha_control_broker.list_control_policy,
+            {},
+            False,
+        )
+        self.register(
+            "home_assistant_list_controllable_entities",
+            "Listet nach Policy kontrollierbare Home-Assistant-Entities.",
+            ActionRisk.GREEN,
+            ha_control_broker.list_controllable_entities,
+            {"domain": "string"},
+            False,
+        )
+        self.register(
+            "home_assistant_resolve_control_intent",
+            "Loest einen Steuerbefehl in eine sichere Home-Assistant-Aktion auf.",
+            ActionRisk.GREEN,
+            ha_control_broker.resolve_control_intent,
+            {"command": "string"},
+            False,
+        )
+        self.register(
+            "home_assistant_prepare_control_action",
+            "Bereitet eine Home-Assistant-Steueraktion gemaess Control Policy vor.",
+            ActionRisk.GREEN,
+            ha_control_broker.prepare_control_action,
+            {"entity_id": "string", "action": "string", "parameters": "dict"},
+            False,
+        )
+        self.register(
+            "home_assistant_execute_control_action",
+            "Fuehrt eine vorbereitete Home-Assistant-Steueraktion nach Bestaetigung aus.",
+            ActionRisk.ORANGE,
+            ha_control_broker.execute_control_action,
+            {"entity_id": "string", "action": "string", "parameters": "dict"},
+            True,
+        )
+        self.register(
+            "home_assistant_prepare_batch_action",
+            "Bereitet eine kontrollierte Home-Assistant-Batch-Aktion vor.",
+            ActionRisk.GREEN,
+            ha_control_broker.prepare_batch_action,
+            {"domain": "string", "action": "string"},
+            False,
+        )
+        self.register(
+            "home_assistant_execute_batch_action",
+            "Fuehrt eine vorbereitete Home-Assistant-Batch-Aktion nach Bestaetigung aus.",
+            ActionRisk.ORANGE,
+            ha_control_broker.execute_batch_action,
+            {"actions": "list"},
+            True,
         )
         self.register(
             "email_search_all",
@@ -413,6 +573,22 @@ class ToolRegistry:
                 "outlook": "mock_disabled",
             },
             {},
+            False,
+        )
+        self.register(
+            "memory_add",
+            "Speichert eine explizite lokale Erinnerung.",
+            ActionRisk.YELLOW,
+            lambda item: memory_store.add_memory(item),
+            {"item": "dict"},
+            True,
+        )
+        self.register(
+            "memory_search",
+            "Sucht im lokalen Gedächtnis.",
+            ActionRisk.GREEN,
+            memory_store.search_memory,
+            {"query": "string"},
             False,
         )
 

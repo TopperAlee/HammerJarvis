@@ -7,7 +7,17 @@ app/logs/audit.log
 .pytest_cache/
 app/secrets/google/*.json
 app/secrets/**/*.json
+app/secrets/microsoft/**
+app/secrets/**/token*.json
+app/secrets/**/*token*
 app/data/timetree/*.ics
 app/data/watchers/*.json
+app/data/home_assistant/*.json
+app/data/memory/*.json
+app/data/memory/*.db
+app/data/memory/*.sqlite
+app/data/local/**
+app/data/**/*.db
+app/data/**/*.sqlite
 workspace/exports/*
 !workspace/exports/.gitkeep

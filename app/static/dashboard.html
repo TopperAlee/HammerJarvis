@@ -122,6 +122,27 @@
             <ul id="problems" class="signal-list compact"></ul>
           </section>
 
+          <section id="entityCatalog" class="hud-panel home-panel">
+            <div class="panel-heading">
+              <span>Home Assistant Entity Catalog</span>
+              <button id="syncHaEntities" class="ghost-button" type="button">Jetzt synchronisieren</button>
+            </div>
+            <div id="haEntityCatalogStatus" class="counts">Entities: - | Unavailable: - | Kandidaten: -</div>
+            <p id="haEntityCatalogSync" class="muted">Entity-Katalog wird geprüft.</p>
+            <div class="control-row">
+              <input id="haEntitySearchInput" type="text" autocomplete="off" placeholder="Entity suchen...">
+              <button id="haEntitySearchButton" type="button">Suchen</button>
+            </div>
+            <div class="quick-row">
+              <button class="ghost-button ha-entity-filter" type="button" data-filter="light">Lichter</button>
+              <button class="ghost-button ha-entity-filter" type="button" data-filter="switch">Switches</button>
+              <button class="ghost-button ha-entity-filter" type="button" data-filter="scene">Szenen</button>
+              <button class="ghost-button ha-entity-filter" type="button" data-filter="unavailable">Unavailable</button>
+              <button class="ghost-button ha-entity-filter" type="button" data-filter="candidates">Freigabe-Kandidaten</button>
+            </div>
+            <ul id="haEntityResults" class="signal-list compact"></ul>
+          </section>
+
           <section id="communication" class="hud-panel mail-panel">
             <div class="panel-heading">
               <span>Gmail Posteingang</span>
@@ -184,6 +205,20 @@
             <ul id="watcherAlerts" class="signal-list compact"></ul>
           </section>
 
+          <section id="performance" class="hud-panel actions-panel">
+            <div class="panel-heading">
+              <span>Performance</span>
+              <button id="refreshPerformance" class="ghost-button" type="button">Performance aktualisieren</button>
+            </div>
+            <div id="performanceSummary" class="counts">Operationen: - | Fehler: -</div>
+            <p id="slowestOperation" class="muted">Langsamste Operation: -</p>
+            <p id="ollamaBenchmarkStatus" class="muted">Ollama-Benchmark nur manuell.</p>
+            <p id="haCachePerformance" class="muted">HA Entity Cache: -</p>
+            <div class="quick-row">
+              <button id="runOllamaBenchmark" class="ghost-button" type="button">Ollama Benchmark</button>
+            </div>
+          </section>
+
           <section id="skills" class="hud-panel skills-panel">
             <div class="panel-heading">
               <span>Skills</span>
@@ -197,6 +232,68 @@
               <button class="quick-command" type="button" data-command="Recherchiere Microsoft Graph Search und erstelle eine Excel mit Quellen">Webquellen als Excel</button>
             </div>
             <p class="muted">Skills kombinieren lokale Suche, Recherche und Exportwerkzeuge sicher über den Assistant.</p>
+          </section>
+
+          <section id="smartHomeActions" class="hud-panel actions-panel">
+            <div class="panel-heading">
+              <span>Freigegebene Smart-Home-Aktionen</span>
+              <button id="refreshSmartHomeActions" class="ghost-button" type="button">Aktualisieren</button>
+            </div>
+            <p class="muted">Nur definierte Lichter, vertrauenswürdige Switches und erlaubte Szenen werden kontrolliert.</p>
+            <div class="quick-row">
+              <button id="discoverSmartHomeCandidates" class="ghost-button" type="button">Kandidaten suchen</button>
+            </div>
+            <ul id="allowedSmartHomeActions" class="signal-list compact"></ul>
+            <div class="muted">Schaltbare Kandidaten</div>
+            <ul id="smartHomeCandidates" class="signal-list compact"></ul>
+          </section>
+
+          <section id="smartHomeAutoPolicy" class="hud-panel actions-panel">
+            <div class="panel-heading">
+              <span>Smart-Home Auto-Ausführung</span>
+              <button id="refreshSmartHomeAutoPolicy" class="ghost-button" type="button">Policy laden</button>
+            </div>
+            <div id="smartHomeAutoStatus" class="counts">Auto-Ausführung: -</div>
+            <p class="muted">Auto-Ausführung gilt nur für definierte sichere Domains und vertrauenswürdige Geräte.</p>
+            <div class="muted">Auto-Domains</div>
+            <ul id="smartHomeAutoDomains" class="signal-list compact"></ul>
+            <div class="muted">Blockierte Geräteklassen</div>
+            <ul id="smartHomeBlockedDomains" class="signal-list compact"></ul>
+            <div class="muted">Vertrauenswürdige Switches</div>
+            <ul id="smartHomeTrustedSwitches" class="signal-list compact"></ul>
+          </section>
+
+          <section id="haControlCenter" class="hud-panel actions-panel">
+            <div class="panel-heading">
+              <span>Home Assistant Steuerung</span>
+              <button id="refreshHaControlPolicy" class="ghost-button" type="button">Policy laden</button>
+            </div>
+            <p id="haControlStatus" class="muted">Control Broker bereit. Aktionen werden nur vorbereitet.</p>
+            <div class="control-row">
+              <input id="haControlCommandInput" type="text" autocomplete="off" placeholder="z.B. Flur Licht einschalten">
+              <button id="haControlPrepareButton" type="button">Vorbereiten</button>
+            </div>
+            <div class="risk-legend muted">
+              GELB: Bestätigung · ORANGE: erhöhte Vorsicht · ROT: blockiert/PIN später
+            </div>
+            <ul id="haControlEntities" class="signal-list compact"></ul>
+          </section>
+
+          <section id="memory" class="hud-panel actions-panel">
+            <div class="panel-heading">
+              <span>Gedächtnis</span>
+              <button id="refreshMemory" class="ghost-button" type="button">Aktualisieren</button>
+            </div>
+            <p id="memoryStatus" class="muted">Lokales Gedächtnis wird geladen.</p>
+            <div class="control-row">
+              <input id="memorySearchInput" type="text" autocomplete="off" placeholder="Gedächtnis durchsuchen...">
+              <button id="memorySearchButton" type="button">Suchen</button>
+            </div>
+            <div class="control-row">
+              <input id="memoryAddInput" type="text" autocomplete="off" placeholder="Neue Erinnerung, z.B. switch.hall ist Flur Licht">
+              <button id="memoryAddButton" type="button">Speichern</button>
+            </div>
+            <ul id="memoryResults" class="signal-list compact"></ul>
           </section>
 
           <section id="actions" class="hud-panel actions-panel">

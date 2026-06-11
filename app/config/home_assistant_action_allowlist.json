@@ -1,0 +1,21 @@
+{
+  "allowed_entities": [
+    {
+      "entity_id": "light.wohnzimmer",
+      "friendly_name": "Wohnzimmer Licht",
+      "domain": "light",
+      "allowed_actions": ["turn_on", "turn_off"]
+    }
+  ],
+  "allowed_scenes": [],
+  "blocked_domains": [
+    "lock",
+    "alarm_control_panel",
+    "cover",
+    "climate",
+    "fan",
+    "valve",
+    "siren",
+    "camera"
+  ]
+}

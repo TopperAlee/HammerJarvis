@@ -1,0 +1,126 @@
+{
+  "control_mode": "trusted_auto",
+  "require_confirmation_for_all_actions": false,
+  "auto_execute_enabled": true,
+  "auto_execute_domains": {
+    "light": {
+      "enabled": true,
+      "actions": ["turn_on", "turn_off", "toggle"],
+      "risk": "YELLOW"
+    },
+    "switch": {
+      "enabled": true,
+      "actions": ["turn_on", "turn_off", "toggle"],
+      "risk": "YELLOW",
+      "only_if_trusted_switch": true
+    },
+    "climate": {
+      "enabled": true,
+      "actions": ["set_temperature"],
+      "risk": "ORANGE",
+      "temperature_min": 16,
+      "temperature_max": 24,
+      "max_delta_celsius": 3
+    }
+  },
+  "require_confirmation_domains": [
+    "cover",
+    "script",
+    "automation"
+  ],
+  "blocked_domains": [
+    "lock",
+    "alarm_control_panel",
+    "camera",
+    "siren",
+    "valve",
+    "button",
+    "remote",
+    "vacuum"
+  ],
+  "trusted_switches": [
+    {
+      "entity_id": "switch.hall",
+      "friendly_name": "Flur Licht",
+      "category": "light_equivalent",
+      "auto_execute": true
+    }
+  ],
+  "blocked_entities": [],
+  "enable_high_risk_actions": false,
+  "require_pin_for_high_risk": true,
+  "confirmation_pin_hash": "",
+  "default_action_expiry_minutes": 10,
+  "domains": {
+    "light": {
+      "enabled": true,
+      "risk": "YELLOW",
+      "allowed_actions": ["turn_on", "turn_off", "toggle"]
+    },
+    "switch": {
+      "enabled": true,
+      "risk": "YELLOW",
+      "allowed_actions": ["turn_on", "turn_off", "toggle"],
+      "warning": "Switches können Steckdosen oder Geräte schalten. Nur ausführen, wenn der Zweck klar ist."
+    },
+    "scene": {
+      "enabled": true,
+      "risk": "YELLOW",
+      "allowed_actions": ["turn_on"]
+    },
+    "script": {
+      "enabled": true,
+      "risk": "ORANGE",
+      "allowed_actions": ["turn_on"],
+      "warning": "Scripts können mehrere Aktionen ausführen. Nur bestätigte Scripts starten."
+    },
+    "automation": {
+      "enabled": true,
+      "risk": "ORANGE",
+      "allowed_actions": ["turn_on", "turn_off"],
+      "warning": "Automationen beeinflussen Systemverhalten dauerhaft."
+    },
+    "climate": {
+      "enabled": true,
+      "risk": "ORANGE",
+      "allowed_actions": ["set_temperature"],
+      "warning": "Klima-/Heizungsänderungen beeinflussen Komfort und Energieverbrauch."
+    },
+    "cover": {
+      "enabled": true,
+      "risk": "ORANGE",
+      "allowed_actions": ["open_cover", "close_cover", "stop_cover"],
+      "warning": "Abdeckungen/Rollläden können mechanische Bewegung auslösen."
+    },
+    "lock": {
+      "enabled": false,
+      "risk": "RED",
+      "allowed_actions": []
+    },
+    "alarm_control_panel": {
+      "enabled": false,
+      "risk": "RED",
+      "allowed_actions": []
+    },
+    "camera": {
+      "enabled": false,
+      "risk": "RED",
+      "allowed_actions": []
+    },
+    "button": {
+      "enabled": false,
+      "risk": "RED",
+      "allowed_actions": []
+    }
+  },
+  "entity_overrides": {
+    "switch.hall": {
+      "enabled": true,
+      "risk": "YELLOW",
+      "friendly_name": "Flur Licht",
+      "allowed_actions": ["turn_on", "turn_off"],
+      "category": "light_equivalent",
+      "auto_execute": true
+    }
+  }
+}

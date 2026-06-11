@@ -1,9 +1,11 @@
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from app.tools.files.path_safety import DEFAULT_FILE_SEARCH_ALLOWED_DIRS, get_allowed_search_dirs, get_export_dir
+from app.assistant.performance.timing import time_operation
 
 
 SUPPORTED_EXTENSIONS = {
@@ -19,6 +21,7 @@ SUPPORTED_EXTENSIONS = {
     ".jpg",
     ".jpeg",
 }
+SKIP_DIR_NAMES = {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", "appdata"}
 
 
 class FileSearchTool:
@@ -35,22 +38,24 @@ class FileSearchTool:
         searched_dirs: list[str] = []
         skipped_dirs: list[str] = []
 
-        if cleaned_query:
-            for directory in get_allowed_search_dirs():
-                if not directory.exists() or not directory.is_dir():
-                    skipped_dirs.append(str(directory))
-                    continue
-                searched_dirs.append(str(directory))
-                for path in _iter_supported_files(directory):
-                    if len(matches) >= max_results:
-                        break
-                    if allowed_extensions and path.suffix.lower() not in allowed_extensions:
+        with time_operation("file_search.search_files", "file_search"):
+            deadline = time.monotonic() + float(os.getenv("FILE_SEARCH_TIMEOUT_SECONDS", "20"))
+            if cleaned_query:
+                for directory in get_allowed_search_dirs():
+                    if not directory.exists() or not directory.is_dir():
+                        skipped_dirs.append(str(directory))
                         continue
-                    file_match = _path_match_result(path, cleaned_query)
-                    if file_match:
-                        matches.append(file_match)
-                if len(matches) >= max_results:
-                    break
+                    searched_dirs.append(str(directory))
+                    for path in _iter_supported_files(directory, skipped_dirs, deadline):
+                        if len(matches) >= max_results or time.monotonic() > deadline:
+                            break
+                        if allowed_extensions and path.suffix.lower() not in allowed_extensions:
+                            continue
+                        file_match = _path_match_result(path, cleaned_query)
+                        if file_match:
+                            matches.append(file_match)
+                    if len(matches) >= max_results or time.monotonic() > deadline:
+                        break
 
         matches.sort(key=lambda item: item["score"], reverse=True)
         files = matches[:max_results]
@@ -63,6 +68,7 @@ class FileSearchTool:
             "count": len(files),
             "files": files,
             "message": _search_message(files),
+            "duration_limited": time.monotonic() > deadline if cleaned_query else False,
         }
         from app.assistant.session_state import session_state
 
@@ -106,6 +112,8 @@ def get_file_search_status() -> dict[str, Any]:
         "onedrive_env": str(onedrive_path) if onedrive_path else None,
         "onedrive_configured": _is_onedrive_configured(onedrive_path, allowed_dirs),
         "max_results": int(os.getenv("FILE_SEARCH_MAX_RESULTS", "25")),
+        "max_depth": int(os.getenv("FILE_SEARCH_MAX_DEPTH", "12")),
+        "timeout_seconds": float(os.getenv("FILE_SEARCH_TIMEOUT_SECONDS", "20")),
     }
 
 
@@ -138,15 +146,38 @@ def _search_message(files: list[dict[str, Any]]) -> str:
     return f"{len(files)} Dateien gefunden."
 
 
-def _iter_supported_files(directory: Path) -> list[Path]:
+def _iter_supported_files(directory: Path, skipped_dirs: list[str] | None = None, deadline: float | None = None) -> list[Path]:
     files: list[Path] = []
     for root, _dirs, names in os.walk(directory):
+        if deadline is not None and time.monotonic() > deadline:
+            break
+        root_path = Path(root)
+        depth = _relative_depth(directory, root_path)
+        original_dirs = list(_dirs)
+        _dirs[:] = [
+            name
+            for name in _dirs
+            if depth < int(os.getenv("FILE_SEARCH_MAX_DEPTH", "12"))
+            and name.lower() not in SKIP_DIR_NAMES
+            and not name.startswith(".")
+        ]
+        if skipped_dirs is not None:
+            for name in original_dirs:
+                if name not in _dirs:
+                    skipped_dirs.append(str(root_path / name))
         for name in names:
             path = Path(root) / name
             if path.suffix.lower() in SUPPORTED_EXTENSIONS:
                 files.append(path)
     files.sort(key=lambda path: (path.name.lower(), str(path).lower()))
     return files
+
+
+def _relative_depth(base: Path, path: Path) -> int:
+    try:
+        return len(path.relative_to(base).parts)
+    except ValueError:
+        return 0
 
 
 def _file_result(path: Path) -> dict[str, Any]:

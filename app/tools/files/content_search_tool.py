@@ -1,11 +1,14 @@
 import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from app.tools.files.content_extractors import SUPPORTED_CONTENT_EXTENSIONS, extract_text
 from app.tools.files.path_safety import get_allowed_search_dirs, normalize_user_path
+from app.tools.files.file_search_tool import SKIP_DIR_NAMES
+from app.assistant.performance.timing import time_operation
 
 
 class ContentSearchTool:
@@ -19,18 +22,26 @@ class ContentSearchTool:
         matches: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
         searched_dirs: list[str] = []
-        for directory in get_allowed_search_dirs():
-            if not directory.exists() or not directory.is_dir():
-                skipped.append({"path": str(directory), "reason": "Verzeichnis fehlt"})
-                continue
-            searched_dirs.append(str(directory))
-            for path in _iter_content_files(directory, normalized_extensions):
-                file_result = _inspect_allowed_path(path, query)
-                if file_result.get("skipped") or file_result.get("error"):
-                    skipped.append({"path": str(path), "reason": str(file_result.get("reason") or file_result.get("message") or "Fehler")})
+        deadline = time.monotonic() + float(os.getenv("FILE_SEARCH_TIMEOUT_SECONDS", "20"))
+        with time_operation("content_search.search_file_contents", "content_search"):
+            for directory in get_allowed_search_dirs():
+                if time.monotonic() > deadline:
+                    break
+                if not directory.exists() or not directory.is_dir():
+                    skipped.append({"path": str(directory), "reason": "Verzeichnis fehlt"})
                     continue
-                if file_result.get("score", 0) > 0:
-                    matches.append(file_result)
+                searched_dirs.append(str(directory))
+                for path in _iter_content_files(directory, normalized_extensions, skipped, deadline):
+                    if time.monotonic() > deadline:
+                        break
+                    file_result = _inspect_allowed_path(path, query)
+                    if file_result.get("skipped") or file_result.get("error"):
+                        skipped.append({"path": str(path), "reason": str(file_result.get("reason") or file_result.get("message") or "Fehler")})
+                        continue
+                    if file_result.get("score", 0) > 0:
+                        matches.append(file_result)
+                    if len(matches) >= limit:
+                        break
         matches.sort(key=lambda item: item["score"], reverse=True)
         limited = matches[:limit]
         result = {
@@ -41,6 +52,7 @@ class ContentSearchTool:
             "searched_dirs": searched_dirs,
             "skipped": skipped,
             "skipped_count": len(skipped),
+            "duration_limited": time.monotonic() > deadline,
             "message": _content_search_message(len(limited), skipped, normalized_extensions),
         }
         from app.assistant.session_state import session_state
@@ -94,9 +106,24 @@ def _inspect_allowed_path(path: Path, query: str) -> dict[str, Any]:
     }
 
 
-def _iter_content_files(directory: Path, extensions: set[str]) -> list[Path]:
+def _iter_content_files(directory: Path, extensions: set[str], skipped: list[dict[str, str]], deadline: float) -> list[Path]:
     files: list[Path] = []
     for root, _dirs, names in os.walk(directory):
+        if time.monotonic() > deadline:
+            break
+        root_path = Path(root)
+        depth = _relative_depth(directory, root_path)
+        original_dirs = list(_dirs)
+        _dirs[:] = [
+            name
+            for name in _dirs
+            if depth < int(os.getenv("FILE_SEARCH_MAX_DEPTH", "12"))
+            and name.lower() not in SKIP_DIR_NAMES
+            and not name.startswith(".")
+        ]
+        for name in original_dirs:
+            if name not in _dirs:
+                skipped.append({"path": str(root_path / name), "reason": "Ordner uebersprungen"})
         for name in names:
             path = Path(root) / name
             suffix = path.suffix.lower()
@@ -106,6 +133,13 @@ def _iter_content_files(directory: Path, extensions: set[str]) -> list[Path]:
                 continue
             files.append(path)
     return files
+
+
+def _relative_depth(base: Path, path: Path) -> int:
+    try:
+        return len(path.relative_to(base).parts)
+    except ValueError:
+        return 0
 
 
 def _normalize_extensions(extensions: list[str] | None) -> set[str]:

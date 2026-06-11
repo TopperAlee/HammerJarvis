@@ -170,9 +170,10 @@ def test_hauscheck_answer_highlights_low_ecoflow_battery(monkeypatch) -> None:
 def test_orchestrator_executes_first_pending_action() -> None:
     registry = ToolRegistry()
     registry.register("test_green", "test", ActionRisk.GREEN, lambda: {"ok": True})
-    pending_action_store.create_action(
+    action = pending_action_store.create_action(
         {"title": "Test", "description": "Test", "tool_name": "test_green", "arguments": {}, "risk": "GREEN", "source": "chat"}
     )
+    pending_action_store.present_actions([action], source="chat")
 
     result = AssistantOrchestrator(registry=registry).handle_message("Führe Aktion 1 aus")
 
@@ -183,9 +184,10 @@ def test_orchestrator_executes_first_pending_action() -> None:
 def test_yellow_action_message_requires_explicit_confirmation() -> None:
     registry = ToolRegistry()
     registry.register("yellow_tool", "yellow", ActionRisk.YELLOW, lambda: {"ok": True}, requires_confirmation=True)
-    pending_action_store.create_action(
+    action = pending_action_store.create_action(
         {"title": "Gelb", "description": "Gelb", "tool_name": "yellow_tool", "arguments": {}, "risk": "YELLOW", "source": "chat"}
     )
+    pending_action_store.present_actions([action], source="chat")
 
     result = AssistantOrchestrator(registry=registry).handle_message("Führe Aktion 1 aus")
 
@@ -196,7 +198,7 @@ def test_yellow_action_message_requires_explicit_confirmation() -> None:
 def test_yellow_action_executes_after_confirmation() -> None:
     registry = ToolRegistry()
     registry.register("energy_saving_recommendations", "energy", ActionRisk.YELLOW, lambda soc_percent=None, source="ecoflow": {"recommendations": ["ok"]}, requires_confirmation=True)
-    pending_action_store.create_action(
+    action = pending_action_store.create_action(
         {
             "title": "EcoFlow-Batterie kritisch niedrig prüfen",
             "description": "test",
@@ -207,14 +209,243 @@ def test_yellow_action_executes_after_confirmation() -> None:
             "requires_confirmation": True,
         }
     )
+    pending_action_store.present_actions([action], source="hauscheck")
 
     result = AssistantOrchestrator(registry=registry).handle_message("Bestätige Aktion 1")
 
     assert result["result"]["status"] == "executed"
 
 
-def test_confirmed_yellow_energy_action_returns_recommendations() -> None:
+def test_confirming_recent_smart_home_action_does_not_execute_stale_hauscheck_action() -> None:
+    executed: list[str] = []
+    registry = ToolRegistry()
+    registry.register(
+        "energy_saving_recommendations",
+        "energy",
+        ActionRisk.YELLOW,
+        lambda soc_percent=None, source="ecoflow": executed.append("ecoflow") or {"message": "EcoFlow"},
+        requires_confirmation=True,
+    )
+    registry.register(
+        "hauscheck_diagnostic_report",
+        "report",
+        ActionRisk.GREEN,
+        lambda: executed.append("report") or {"created": True, "path": "hauscheck.md", "message": "Diagnosebericht wurde erstellt."},
+    )
+    registry.register(
+        "home_assistant_get_problems",
+        "ha",
+        ActionRisk.GREEN,
+        lambda: executed.append("backup") or {"message": "Backup"},
+    )
+    registry.register(
+        "home_assistant_resolve_control_intent",
+        "resolve",
+        ActionRisk.GREEN,
+        lambda command: {
+            "title": "Flur Licht ausschalten",
+            "entity_id": "light.flur",
+            "action": "turn_off",
+            "risk": "YELLOW",
+            "parameters": {},
+        },
+    )
+    registry.register(
+        "home_assistant_execute_control_action",
+        "execute",
+        ActionRisk.YELLOW,
+        lambda entity_id, action, parameters=None: executed.append(f"{entity_id}:{action}") or {"message": "Flur Licht wurde ausgeschaltet."},
+        requires_confirmation=True,
+    )
+    for action in (
+        {
+            "title": "EcoFlow-Batterie kritisch niedrig prüfen",
+            "tool_name": "energy_saving_recommendations",
+            "arguments": {"soc_percent": 10, "source": "ecoflow"},
+            "risk": "YELLOW",
+            "source": "hauscheck",
+            "requires_confirmation": True,
+        },
+        {"title": "Diagnosebericht erstellen", "tool_name": "hauscheck_diagnostic_report", "arguments": {}, "risk": "GREEN", "source": "hauscheck"},
+        {"title": "Home-Assistant-Backup-Warnungen analysieren", "tool_name": "home_assistant_get_problems", "arguments": {}, "risk": "GREEN", "source": "hauscheck"},
+    ):
+        pending_action_store.create_action(action)
+
+    orchestrator = AssistantOrchestrator(registry=registry)
+    prepared = orchestrator.handle_message("Jarvis, Flur Licht ausschalten.")
+    confirmed = orchestrator.handle_message("Bestätige Aktion 1")
+
+    assert "Bestätige Aktion 1" in prepared["answer"]
+    assert confirmed["result"]["action"]["title"] == "Flur Licht ausschalten"
+    assert executed == ["light.flur:turn_off"]
+    assert pending_action_store.list_pending_actions()[0]["title"] == "EcoFlow-Batterie kritisch niedrig prüfen"
+
+
+def test_hauscheck_display_context_action_2_executes_second_action() -> None:
+    executed: list[str] = []
+    registry = ToolRegistry()
+    registry.register("first_tool", "first", ActionRisk.GREEN, lambda: executed.append("first") or {"message": "first"})
+    registry.register("second_tool", "second", ActionRisk.GREEN, lambda: executed.append("second") or {"created": True, "path": "diagnose.md", "message": "Diagnosebericht wurde erstellt."})
+    actions = [
+        pending_action_store.create_action({"title": "EcoFlow prüfen", "tool_name": "first_tool", "arguments": {}, "risk": "YELLOW", "source": "hauscheck", "requires_confirmation": True}),
+        pending_action_store.create_action({"title": "Diagnosebericht erstellen", "tool_name": "second_tool", "arguments": {}, "risk": "GREEN", "source": "hauscheck"}),
+    ]
+    pending_action_store.present_actions(actions, source="hauscheck")
+
+    result = AssistantOrchestrator(registry=registry).handle_message("Führe Aktion 2 aus")
+
+    assert result["result"]["action"]["title"] == "Diagnosebericht erstellen"
+    assert executed == ["second"]
+
+
+def test_yes_confirms_only_single_recent_presented_action() -> None:
+    registry = ToolRegistry()
+    registry.register("yellow_tool", "yellow", ActionRisk.YELLOW, lambda: {"message": "ok"}, requires_confirmation=True)
+    action = pending_action_store.create_action(
+        {"title": "Gelb", "description": "Gelb", "tool_name": "yellow_tool", "arguments": {}, "risk": "YELLOW", "source": "chat", "requires_confirmation": True}
+    )
+    pending_action_store.present_actions([action], source="chat")
+
+    result = AssistantOrchestrator(registry=registry).handle_message("Ja")
+
+    assert result["result"]["status"] == "executed"
+    assert result["result"]["action"]["title"] == "Gelb"
+
+
+def test_yes_with_multiple_recent_actions_asks_for_clarification() -> None:
+    actions = [
+        pending_action_store.create_action({"title": "A", "tool_name": "test", "arguments": {}, "risk": "GREEN", "source": "test"}),
+        pending_action_store.create_action({"title": "B", "tool_name": "test", "arguments": {}, "risk": "GREEN", "source": "test"}),
+    ]
+    pending_action_store.present_actions(actions, source="test")
+
+    result = AssistantOrchestrator().handle_message("Ja")
+
+    assert "welche Aktion" in result["answer"]
+
+
+def test_confirm_without_recent_context_is_ambiguous() -> None:
+    pending_action_store.create_action({"title": "A", "tool_name": "test", "arguments": {}, "risk": "GREEN", "source": "test"})
+
+    result = AssistantOrchestrator().handle_message("Bestätige Aktion 1")
+
+    assert "nicht eindeutig zuordnen" in result["answer"]
+
+
+def test_pending_endpoint_returns_display_indices() -> None:
+    pending_action_store.create_action({"title": "A", "tool_name": "test", "arguments": {}, "risk": "GREEN", "source": "test"})
+    pending_action_store.create_action({"title": "B", "tool_name": "test", "arguments": {}, "risk": "GREEN", "source": "test"})
+
+    response = client.get("/assistant/actions/pending")
+
+    assert response.status_code == 200
+    assert [action["display_index"] for action in response.json()["actions"]] == [1, 2]
+
+
+def test_ambiguous_plural_confirmation_preserves_recent_smart_home_context() -> None:
+    executed: list[str] = []
+    registry = ToolRegistry()
+    registry.register(
+        "energy_saving_recommendations",
+        "energy",
+        ActionRisk.YELLOW,
+        lambda soc_percent=None, source="ecoflow": executed.append("ecoflow") or {"message": "EcoFlow"},
+        requires_confirmation=True,
+    )
+    registry.register(
+        "home_assistant_resolve_control_intent",
+        "resolve",
+        ActionRisk.GREEN,
+        lambda command: {
+            "title": "Flur Licht einschalten",
+            "entity_id": "light.flur",
+            "action": "turn_on",
+            "risk": "YELLOW",
+            "parameters": {},
+        },
+    )
+    registry.register(
+        "home_assistant_execute_control_action",
+        "execute",
+        ActionRisk.YELLOW,
+        lambda entity_id, action, parameters=None: executed.append(f"{entity_id}:{action}") or {"message": "Flur Licht wurde eingeschaltet."},
+        requires_confirmation=True,
+    )
     pending_action_store.create_action(
+        {
+            "title": "EcoFlow-Batterie kritisch niedrig prüfen",
+            "tool_name": "energy_saving_recommendations",
+            "arguments": {"soc_percent": 10, "source": "ecoflow"},
+            "risk": "YELLOW",
+            "source": "hauscheck",
+            "requires_confirmation": True,
+        }
+    )
+
+    orchestrator = AssistantOrchestrator(registry=registry)
+    prepared = orchestrator.handle_message("Jarvis, Flur Licht einschalten.")
+    ambiguous = orchestrator.handle_message("bestätige Aktionen")
+    confirmed = orchestrator.handle_message("bestätige Aktion 1")
+
+    assert "Bestätige Aktion 1" in prepared["answer"]
+    assert "Meinst du Aktion 1: Flur Licht einschalten" in ambiguous["answer"]
+    assert confirmed["result"]["action"]["title"] == "Flur Licht einschalten"
+    assert executed == ["light.flur:turn_on"]
+
+
+def test_presented_context_contains_lifecycle_metadata() -> None:
+    action = pending_action_store.create_action({"title": "A", "tool_name": "test", "arguments": {}, "risk": "GREEN", "source": "test"})
+
+    pending_action_store.present_actions([action], source="test")
+    context = pending_action_store.get_active_context()
+
+    assert context is not None
+    assert context["context_id"]
+    assert context["presented_action_ids"] == [action["id"]]
+    assert context["source"] == "test"
+    assert context["created_at"]
+    assert context["expires_at"]
+    assert context["consumed"] is False
+
+
+def test_executed_action_consumes_presented_context() -> None:
+    registry = ToolRegistry()
+    registry.register("test_green", "test", ActionRisk.GREEN, lambda: {"ok": True})
+    action = pending_action_store.create_action({"title": "Test", "tool_name": "test_green", "arguments": {}, "risk": "GREEN", "source": "test"})
+    pending_action_store.present_actions([action], source="test")
+
+    AssistantOrchestrator(registry=registry).handle_message("Führe Aktion 1 aus")
+
+    context = pending_action_store.get_active_context()
+    assert context is None or context["consumed"] is True
+
+
+def test_plural_confirmation_with_one_active_action_asks_for_exact_number() -> None:
+    registry = ToolRegistry()
+    registry.register("yellow_tool", "yellow", ActionRisk.YELLOW, lambda: {"message": "ok"}, requires_confirmation=True)
+    action = pending_action_store.create_action(
+        {"title": "Flur Licht einschalten", "tool_name": "yellow_tool", "arguments": {}, "risk": "YELLOW", "source": "smart_home", "requires_confirmation": True}
+    )
+    pending_action_store.present_actions([action], source="smart_home")
+
+    result = AssistantOrchestrator(registry=registry).handle_message("bestätige alle Aktionen")
+
+    assert "Meinst du Aktion 1: Flur Licht einschalten" in result["answer"]
+    assert pending_action_store.get_active_context()["presented_action_ids"] == [action["id"]]
+
+
+def test_show_open_actions_creates_fresh_display_context() -> None:
+    first = pending_action_store.create_action({"title": "A", "tool_name": "test", "arguments": {}, "risk": "GREEN", "source": "test"})
+    second = pending_action_store.create_action({"title": "B", "tool_name": "test", "arguments": {}, "risk": "GREEN", "source": "test"})
+
+    result = AssistantOrchestrator().handle_message("zeige offene Aktionen")
+
+    assert "Mögliche nächste Aktionen" in result["answer"]
+    assert pending_action_store.get_active_context()["presented_action_ids"] == [first["id"], second["id"]]
+
+
+def test_confirmed_yellow_energy_action_returns_recommendations() -> None:
+    action = pending_action_store.create_action(
         {
             "title": "EcoFlow-Batterie kritisch niedrig prÃ¼fen",
             "description": "test",
@@ -225,6 +456,7 @@ def test_confirmed_yellow_energy_action_returns_recommendations() -> None:
             "requires_confirmation": True,
         }
     )
+    pending_action_store.present_actions([action], source="hauscheck")
 
     result = AssistantOrchestrator().handle_message("BestÃ¤tige Aktion 1")
 
@@ -271,7 +503,7 @@ def test_green_file_action_response_shows_created_path(tmp_path: Path) -> None:
             "message": "Diagnosebericht wurde erstellt.",
         },
     )
-    pending_action_store.create_action(
+    action = pending_action_store.create_action(
         {
             "title": "Diagnosebericht erstellen",
             "description": "test",
@@ -281,6 +513,7 @@ def test_green_file_action_response_shows_created_path(tmp_path: Path) -> None:
             "source": "hauscheck",
         }
     )
+    pending_action_store.present_actions([action], source="hauscheck")
 
     result = AssistantOrchestrator(registry=registry).handle_message("FÃ¼hre Aktion 1 aus")
 

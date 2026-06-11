@@ -190,10 +190,53 @@ def test_dashboard_still_returns_200() -> None:
 
 def _controller(monkeypatch, tmp_path, tool_results: dict[str, dict[str, Any]]) -> WatcherController:
     monkeypatch.setenv("WATCHER_ALERTS_FILE", str(tmp_path / "alerts.json"))
+    rules_file = tmp_path / "watcher_rules.json"
+    rules_file.write_text(
+        __import__("json").dumps({"rules": [_rule_for_tool(name) for name in tool_results]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WATCHER_RULES_FILE", str(rules_file))
     registry = ToolRegistry()
     for name, result in tool_results.items():
         registry.register(name, name, ActionRisk.GREEN, lambda result=result: result)
     return WatcherController(registry=registry)
+
+
+def _rule_for_tool(tool_name: str) -> dict[str, Any]:
+    if tool_name == "ecoflow_energy_overview":
+        return {
+            "id": "ecoflow_low_battery",
+            "enabled": True,
+            "type": "ecoflow_low_battery",
+            "threshold_percent": 20,
+            "severity": "high",
+            "cooldown_minutes": 60,
+        }
+    if tool_name == "home_assistant_get_problems":
+        return {
+            "id": "home_assistant_critical",
+            "enabled": True,
+            "type": "home_assistant_critical",
+            "severity": "critical",
+            "cooldown_minutes": 30,
+        }
+    if tool_name == "gmail_unread_recent":
+        return {
+            "id": "security_email",
+            "enabled": True,
+            "type": "gmail_security_email",
+            "severity": "high",
+            "cooldown_minutes": 120,
+        }
+    if tool_name == "timetree_today":
+        return {
+            "id": "timetree_today",
+            "enabled": True,
+            "type": "timetree_today_events",
+            "severity": "info",
+            "cooldown_minutes": 240,
+        }
+    return {"id": tool_name, "enabled": True, "type": tool_name}
 
 
 def _ecoflow(soc: float) -> dict[str, Any]:

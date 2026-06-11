@@ -10,6 +10,10 @@ from app.assistant.actions.action_planner import ActionPlanner
 from app.assistant.actions.pending_action_store import pending_action_store
 from app.assistant.formatters.ecoflow_formatter import format_ecoflow_energy_answer
 from app.assistant.llm_client import LLMClient, sanitize_identity_response
+from app.assistant.memory.memory_classifier import MemoryClassifier, infer_memory_item
+from app.assistant.memory.memory_formatter import format_memory_added, format_memory_list
+from app.assistant.memory.memory_retriever import relevant_memory_context
+from app.assistant.memory.memory_store import MemoryStore
 from app.assistant.missions import MissionController
 from app.assistant.skills.skill_registry import SkillRegistry
 from app.assistant.system_prompt import SYSTEM_PROMPT
@@ -35,24 +39,42 @@ class AssistantOrchestrator:
         normalized = normalize_message(message)
         if _is_email_send_intent(normalized) or _is_email_create_intent(normalized):
             return self._handle_rule_based(message, normalized, confirm)
+        memory_response = self._handle_memory_command(message, normalized)
+        if memory_response:
+            return memory_response
         priority_feedback = _handle_priority_feedback(message)
         if priority_feedback:
             return priority_feedback
         watcher_response = _handle_watcher_command(normalized)
         if watcher_response:
             return watcher_response
+        file_action_response = self._handle_file_result_action(normalized)
+        if file_action_response:
+            return file_action_response
         action_response = self._handle_action_command(normalized)
         if action_response:
             return action_response
+        ha_allowlist_response = self._handle_home_assistant_allowlist_query(normalized)
+        if ha_allowlist_response:
+            return ha_allowlist_response
+        ha_entity_catalog_response = self._handle_home_assistant_entity_catalog_command(message, normalized)
+        if ha_entity_catalog_response:
+            return ha_entity_catalog_response
+        ha_control_response = self._handle_home_assistant_control_command(message, normalized)
+        if ha_control_response:
+            return ha_control_response
+        ha_allowlist_manage_response = self._handle_home_assistant_allowlist_management(normalized)
+        if ha_allowlist_manage_response:
+            return ha_allowlist_manage_response
+        ha_action_response = self._handle_home_assistant_action_command(normalized)
+        if ha_action_response:
+            return ha_action_response
         skill_response = self._handle_skill_command(message, normalized)
         if skill_response:
             return skill_response
         web_response = self._handle_web_research_command(message, normalized)
         if web_response:
             return web_response
-        file_action_response = self._handle_file_result_action(normalized)
-        if file_action_response:
-            return file_action_response
         content_response = self._handle_file_content_command(normalized)
         if content_response:
             return content_response
@@ -156,9 +178,11 @@ class AssistantOrchestrator:
         }
 
     def _handle_llm(self, message: str, confirm: bool) -> dict[str, Any]:
+        memory_context = relevant_memory_context(message)
+        user_content = f"{memory_context}\n\nNutzerfrage: {message}" if memory_context else message
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": message},
+            {"role": "user", "content": user_content},
         ]
         tools = self.registry.get_openai_tool_schemas()
         first_response = self.llm_client.create_response_with_tools(messages, tools)
@@ -341,13 +365,36 @@ class AssistantOrchestrator:
 
     def _handle_action_command(self, normalized: str) -> dict[str, Any] | None:
         if _is_pending_actions_query(normalized):
-            actions = pending_action_store.list_pending_actions()
+            actions = pending_action_store.present_actions(pending_action_store.list_pending_actions(), source="actions_pending")
             return {
                 "mode": "rule_based",
                 "tool": "actions_pending",
                 "answer": _format_pending_actions(actions),
                 "risk": ActionRisk.GREEN,
                 "result": {"actions": actions, "count": len(actions)},
+            }
+        if _is_plural_action_confirmation(normalized):
+            actions = pending_action_store.get_active_presented_actions()
+            if len(actions) == 1:
+                return _action_ambiguous_response(
+                    f"Meinst du Aktion 1: {actions[0].get('title', '')}? Sage 'Bestätige Aktion 1'."
+                )
+            if len(actions) > 1:
+                return _action_ambiguous_response("Bitte nenne die genaue Aktionsnummer, z. B. 'Bestätige Aktion 2'.")
+            return _action_ambiguous_response("Ich kann diese Bestätigung nicht eindeutig zuordnen. Bitte zeige die offenen Aktionen erneut an.")
+        if _is_bare_action_confirmation(normalized):
+            action = pending_action_store.resolve_single_presented_action()
+            if action == "ambiguous":
+                return _action_ambiguous_response("Bitte sag, welche Aktion ich ausführen soll, zum Beispiel: 'Bestätige Aktion 1'.")
+            if action is None:
+                return _action_ambiguous_response("Ich kann diese Bestätigung nicht eindeutig zuordnen. Bitte zeige die offenen Aktionen erneut an.")
+            result = ActionExecutor(registry=self.registry).execute(action["id"], confirm=True)
+            return {
+                "mode": "rule_based",
+                "tool": "action_execute",
+                "answer": _format_action_execution_answer(result),
+                "risk": ActionRisk.GREEN,
+                "result": result,
             }
         action = _pending_action_from_message(normalized)
         if action and _is_action_reject_intent(normalized):
@@ -361,6 +408,8 @@ class AssistantOrchestrator:
                 "risk": ActionRisk.GREEN,
                 "result": result,
             }
+        if action is None and (_is_action_execute_intent(normalized) or _is_action_confirm_intent(normalized)):
+            return _action_ambiguous_response(f"Ich kann Aktion {_action_index(normalized) or 1} nicht eindeutig zuordnen. Bitte zeige die offenen Aktionen erneut an.")
         if action and (_is_action_execute_intent(normalized) or _is_action_reference(normalized)):
             result = ActionExecutor(registry=self.registry).execute(
                 action["id"],
@@ -374,6 +423,307 @@ class AssistantOrchestrator:
                 "result": result,
             }
         return None
+
+    def _handle_memory_command(self, original: str, normalized: str) -> dict[str, Any] | None:
+        if _is_memory_store_command(normalized):
+            text_to_store = _extract_memory_store_text(original)
+            classification = MemoryClassifier().classify_text(text_to_store)
+            if classification.get("blocked"):
+                return {
+                    "mode": "rule_based",
+                    "tool": "memory_add",
+                    "answer": classification["message"],
+                    "risk": ActionRisk.GREEN,
+                    "blocked": True,
+                    "result": classification,
+                }
+            item = MemoryStore().add_memory(infer_memory_item(text_to_store))
+            return {
+                "mode": "rule_based",
+                "tool": "memory_add",
+                "answer": format_memory_added(item),
+                "risk": ActionRisk.GREEN,
+                "result": item,
+            }
+        if _is_memory_recall_command(normalized):
+            query = _extract_memory_query(original)
+            result = MemoryStore().search_memory(query, limit=10)
+            return {
+                "mode": "rule_based",
+                "tool": "memory_search",
+                "answer": format_memory_list(result),
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+        if _is_memory_forget_command(normalized):
+            query = _extract_memory_forget_query(original)
+            matches = MemoryStore().search_memory(query, limit=1).get("memories", [])
+            if not matches:
+                return {"mode": "rule_based", "tool": "memory_delete", "answer": "Ich habe keine passende Erinnerung gefunden.", "risk": ActionRisk.GREEN, "result": {"deleted": False}}
+            result = MemoryStore().delete_memory(matches[0]["id"])
+            return {"mode": "rule_based", "tool": "memory_delete", "answer": "Ich habe die Erinnerung gelöscht.", "risk": ActionRisk.GREEN, "result": result}
+        if _is_ambiguous_correction(normalized):
+            text_to_store = _extract_correction_text(original)
+            action = pending_action_store.create_action(
+                {
+                    "title": "Memory-Vorschlag speichern",
+                    "description": "Korrektur als lokale Erinnerung speichern.",
+                    "tool_name": "memory_add",
+                    "arguments": {"item": infer_memory_item(text_to_store)},
+                    "risk": ActionRisk.YELLOW,
+                    "source": "memory_suggestion",
+                    "requires_confirmation": True,
+                }
+            )
+            presented_actions = pending_action_store.present_actions([action], source="memory_suggestion")
+            return {
+                "mode": "rule_based",
+                "tool": "memory_suggestion",
+                "answer": f"Soll ich mir merken, dass {text_to_store.strip(' .')}?",
+                "risk": ActionRisk.GREEN,
+                "pending_actions": presented_actions,
+                "result": {"suggested": infer_memory_item(text_to_store)},
+            }
+        return None
+
+    def _handle_home_assistant_allowlist_query(self, normalized: str) -> dict[str, Any] | None:
+        if not _is_home_assistant_allowlist_query(normalized):
+            return None
+        executed = self.registry.execute_tool("home_assistant_list_allowed_actions", {}, confirm=False)
+        result = executed.get("result", {})
+        return {
+            "mode": "rule_based",
+            "tool": "home_assistant_list_allowed_actions",
+            "executed_tool": "home_assistant_list_allowed_actions",
+            "answer": _format_home_assistant_allowed_actions(result),
+            "risk": ActionRisk.GREEN,
+            "result": result,
+        }
+
+    def _handle_home_assistant_entity_catalog_command(self, original: str, normalized: str) -> dict[str, Any] | None:
+        route = _home_assistant_entity_catalog_route(original, normalized)
+        if not route:
+            return None
+        tool_name, arguments = route
+        executed = self.registry.execute_tool(tool_name, arguments, confirm=False)
+        result = executed.get("result", {})
+        return {
+            "mode": "rule_based",
+            "tool": tool_name,
+            "executed_tool": tool_name,
+            "answer": _format_home_assistant_entity_catalog(tool_name, result),
+            "risk": ActionRisk.GREEN,
+            "result": result,
+        }
+
+    def _handle_home_assistant_control_command(self, original: str, normalized: str) -> dict[str, Any] | None:
+        if not _is_home_assistant_control_intent(normalized):
+            return None
+        resolved = self.registry.run("home_assistant_resolve_control_intent", command=original)
+        if resolved.get("blocked") and resolved.get("reason") == "entity_not_found":
+            return None
+        if resolved.get("ambiguous"):
+            return {
+                "mode": "rule_based",
+                "tool": "home_assistant_resolve_control_intent",
+                "answer": _format_ha_control_ambiguous(resolved),
+                "risk": ActionRisk.GREEN,
+                "result": resolved,
+            }
+        if resolved.get("blocked"):
+            return {
+                "mode": "rule_based",
+                "tool": "home_assistant_resolve_control_intent",
+                "answer": str(resolved.get("message") or f"Diese Aktion ist blockiert: {resolved.get('reason')}"),
+                "risk": ActionRisk.GREEN,
+                "result": resolved,
+            }
+        if resolved.get("auto_execute"):
+            executed = self.registry.execute_tool(
+                "home_assistant_execute_control_action",
+                {
+                    "entity_id": resolved.get("entity_id"),
+                    "action": resolved.get("action"),
+                    "parameters": resolved.get("parameters", {}),
+                    "source_command": original,
+                },
+                confirm=True,
+            )
+            result = executed.get("result", executed)
+            return {
+                "mode": "rule_based",
+                "tool": "home_assistant_execute_control_action",
+                "executed_tool": "home_assistant_execute_control_action",
+                "answer": _format_ha_control_auto_executed(result),
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+        if resolved.get("batch"):
+            action = pending_action_store.create_action(
+                {
+                    "title": str(resolved.get("title") or "Home-Assistant-Batch-Aktion"),
+                    "description": str(resolved.get("warning") or "Batch-Steueraktion. Ausführung erst nach Bestätigung."),
+                    "tool_name": "home_assistant_execute_batch_action",
+                    "arguments": {"actions": resolved.get("actions", [])},
+                    "risk": resolved.get("risk", "YELLOW"),
+                    "source": "home_assistant_control_broker",
+                    "requires_confirmation": True,
+                }
+            )
+            presented_actions = pending_action_store.present_actions([action], source="smart_home")
+            return {
+                "mode": "rule_based",
+                "tool": "home_assistant_prepare_batch_action",
+                "answer": _format_ha_control_prepared(resolved, action),
+                "risk": ActionRisk.GREEN,
+                "result": resolved,
+                "pending_actions": presented_actions,
+            }
+        action = pending_action_store.create_action(
+            {
+                "title": str(resolved.get("title") or "Home-Assistant-Aktion"),
+                "description": str(resolved.get("warning") or "Steueraktion. Ausführung erst nach Bestätigung."),
+                "tool_name": "home_assistant_execute_control_action",
+                "arguments": {
+                    "entity_id": resolved.get("entity_id"),
+                    "action": resolved.get("action"),
+                    "parameters": resolved.get("parameters", {}),
+                },
+                "risk": resolved.get("risk", "YELLOW"),
+                "source": "home_assistant_control_broker",
+                "requires_confirmation": True,
+            }
+        )
+        presented_actions = pending_action_store.present_actions([action], source="smart_home")
+        return {
+            "mode": "rule_based",
+            "tool": "home_assistant_prepare_control_action",
+            "answer": _format_ha_control_prepared(resolved, action),
+            "risk": ActionRisk.GREEN,
+            "result": resolved,
+            "pending_actions": presented_actions,
+        }
+
+    def _handle_home_assistant_allowlist_management(self, normalized: str) -> dict[str, Any] | None:
+        if _is_home_assistant_discovery_query(normalized):
+            executed = self.registry.execute_tool("home_assistant_discover_actionable_entities", {}, confirm=False)
+            result = executed.get("result", {})
+            return {
+                "mode": "rule_based",
+                "tool": "home_assistant_discover_actionable_entities",
+                "executed_tool": "home_assistant_discover_actionable_entities",
+                "answer": _format_home_assistant_action_candidates(result),
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+        parsed = _parse_home_assistant_allowlist_change(normalized)
+        if not parsed:
+            return None
+        if parsed["mode"] == "remove":
+            allowed = self.registry.run("home_assistant_list_allowed_actions")
+            candidate = _find_candidate(allowed.get("allowed_entities", []), parsed["target"])
+        else:
+            discovery = self.registry.run("home_assistant_discover_actionable_entities")
+            candidate = _find_candidate(discovery.get("candidates", []), parsed["target"])
+        if not candidate:
+            return {
+                "mode": "rule_based",
+                "tool": "home_assistant_allowlist_prepare",
+                "answer": "Ich habe keine sichere passende Entity gefunden. Ich habe nichts freigegeben und nichts geschaltet.",
+                "risk": ActionRisk.GREEN,
+                "result": {"blocked": True, "reason": "candidate_not_found"},
+            }
+        tool_name = "home_assistant_add_to_allowlist" if parsed["mode"] == "add" else "home_assistant_remove_from_allowlist"
+        arguments = (
+            {
+                "entity_id": candidate["entity_id"],
+                "friendly_name": candidate.get("friendly_name") or candidate["entity_id"],
+                "domain": candidate.get("domain") or str(candidate["entity_id"]).split(".", 1)[0],
+                "allowed_actions": candidate.get("suggested_actions") or candidate.get("allowed_actions") or ["turn_on", "turn_off"],
+            }
+            if parsed["mode"] == "add"
+            else {"entity_id": candidate["entity_id"]}
+        )
+        title = (
+            f"{candidate.get('friendly_name') or candidate['entity_id']} zur Smart-Home-Freigabe hinzufügen"
+            if parsed["mode"] == "add"
+            else f"{candidate.get('friendly_name') or candidate['entity_id']} aus Smart-Home-Freigabe entfernen"
+        )
+        action = pending_action_store.create_action(
+            {
+                "title": title,
+                "description": "Änderung an der Smart-Home-Freigabe. Ausführung erst nach Bestätigung.",
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "risk": ActionRisk.YELLOW,
+                "source": "home_assistant_allowlist",
+                "requires_confirmation": True,
+            }
+        )
+        presented_actions = pending_action_store.present_actions([action], source="home_assistant_allowlist")
+        write_audit_log("assistant_action_proposed", {"tool": tool_name, "risk": ActionRisk.YELLOW, "action_id": action["id"]})
+        verb = "hinzufügen" if parsed["mode"] == "add" else "entfernen"
+        answer = (
+            f"Ich kann {candidate.get('friendly_name') or candidate['entity_id']} zur Smart-Home-Freigabe {verb}. "
+            "Diese Änderung benötigt Bestätigung.\nSag: 'Bestätige Aktion 1'."
+        )
+        return {
+            "mode": "rule_based",
+            "tool": "home_assistant_allowlist_prepare",
+            "answer": answer,
+            "risk": ActionRisk.GREEN,
+            "result": {"candidate": candidate, "mode": parsed["mode"]},
+            "pending_actions": presented_actions,
+        }
+
+    def _handle_home_assistant_action_command(self, normalized: str) -> dict[str, Any] | None:
+        parsed = _parse_home_assistant_action_intent(normalized)
+        if not parsed:
+            return None
+        prepare_result = self.registry.run(
+            "home_assistant_prepare_action",
+            entity_name_or_id=parsed["target"],
+            action=parsed["action"],
+        )
+        if prepare_result.get("blocked"):
+            return {
+                "mode": "rule_based",
+                "tool": "home_assistant_prepare_action",
+                "answer": "Diese Aktion ist nicht freigegeben. Ich schalte keine nicht erlaubten Geräte.",
+                "risk": ActionRisk.GREEN,
+                "result": prepare_result,
+            }
+        action = pending_action_store.create_action(
+            {
+                "title": str(prepare_result.get("title") or "Home-Assistant-Aktion ausführen"),
+                "description": "Freigegebene Smart-Home-Aktion. Ausführung erst nach Bestätigung.",
+                "tool_name": "home_assistant_execute_action",
+                "arguments": {
+                    "entity_id": prepare_result.get("entity_id"),
+                    "action": prepare_result.get("action"),
+                },
+                "risk": ActionRisk.YELLOW,
+                "source": "home_assistant_action",
+                "requires_confirmation": True,
+            }
+        )
+        presented_actions = pending_action_store.present_actions([action], source="smart_home")
+        write_audit_log(
+            "assistant_action_proposed",
+            {"tool": "home_assistant_execute_action", "risk": ActionRisk.YELLOW, "action_id": action["id"]},
+        )
+        answer = (
+            f"Ich kann {prepare_result.get('title')}. Diese Aktion benötigt Bestätigung.\n"
+            "Sag: 'Bestätige Aktion 1'."
+        )
+        return {
+            "mode": "rule_based",
+            "tool": "home_assistant_prepare_action",
+            "answer": answer,
+            "risk": ActionRisk.GREEN,
+            "result": prepare_result,
+            "pending_actions": presented_actions,
+        }
 
     def _handle_file_command(self, normalized: str) -> dict[str, Any] | None:
         if _is_onedrive_file_intent(normalized):
@@ -603,6 +953,219 @@ def _is_file_create_intent(message: str) -> bool:
             "exportiere",
         )
     )
+
+
+def _parse_home_assistant_action_intent(message: str) -> dict[str, str] | None:
+    folded = _fold_german_text(message)
+    if _is_unsafe_home_assistant_action_text(folded):
+        return {"target": folded, "action": "blocked"}
+    if "szene" in folded and any(term in folded for term in ("aktivieren", "aktiviere", "einschalten", "an")):
+        target = _cleanup_home_assistant_target(folded, ("aktiviere", "aktivieren", "szene"))
+        return {"target": target or folded, "action": "turn_on"}
+    if not any(term in folded for term in ("schalte", "mach", "licht", "steckdose")):
+        return None
+    action = ""
+    if any(term in folded for term in (" aus", "ausschalten", "mach aus", "licht aus", "steckdose aus")):
+        action = "turn_off"
+    elif any(term in folded for term in (" ein", " an", "einschalten", "anschalten", "mach an", "licht an", "steckdose an")):
+        action = "turn_on"
+    if not action:
+        return None
+    target = _cleanup_home_assistant_target(
+        folded,
+        (
+            "schalte",
+            "mach",
+            "bitte",
+            "die",
+            "das",
+            "den",
+            "ein",
+            "an",
+            "aus",
+            "einschalten",
+            "anschalten",
+            "ausschalten",
+        ),
+    )
+    if not target:
+        if "licht" in folded:
+            target = "licht"
+        elif "steckdose" in folded:
+            target = "steckdose"
+    return {"target": target, "action": action} if target else None
+
+
+def _is_home_assistant_allowlist_query(message: str) -> bool:
+    folded = _fold_german_text(message).replace("-", " ")
+    return any(
+        term in folded
+        for term in (
+            "welche smart home aktionen sind freigegeben",
+            "welche smarthome aktionen sind freigegeben",
+            "was darfst du schalten",
+            "welche geraete darfst du schalten",
+            "welche gerate darfst du schalten",
+            "welche home assistant aktionen sind erlaubt",
+            "zeige allowlist",
+            "zeige freigegebene geraete",
+            "zeige freigegebene gerate",
+            "freigegebene smart home aktionen",
+        )
+    )
+
+
+def _is_home_assistant_discovery_query(message: str) -> bool:
+    folded = _fold_german_text(message).replace("-", " ")
+    return any(
+        term in folded
+        for term in (
+            "zeige schaltbare geraete",
+            "zeige schaltbare gerate",
+            "zeige lichtgeraete",
+            "zeige lichtgerate",
+            "welche geraete kann ich freigeben",
+            "welche gerate kann ich freigeben",
+            "welche smart home geraete sind sicher",
+            "welche smart home gerate sind sicher",
+        )
+    )
+
+
+def _parse_home_assistant_allowlist_change(message: str) -> dict[str, str] | None:
+    folded = _fold_german_text(message)
+    if "freigabe" in folded and any(term in folded for term in ("entferne", "entfernen")):
+        target = _cleanup_home_assistant_target(folded, ("entferne", "entfernen", "aus", "der", "die", "das", "freigabe"))
+        return {"mode": "remove", "target": target} if target else None
+    if any(term in folded for term in ("gib", "erlaube", "fuege", "fuge")) and any(
+        term in folded for term in ("frei", "freigabe", "erlaube", "hinzu")
+    ):
+        target = _cleanup_home_assistant_target(
+            folded,
+            ("gib", "erlaube", "fuege", "fuge", "zur", "freigabe", "hinzu", "frei", "der", "die", "das"),
+        )
+        return {"mode": "add", "target": target} if target else None
+    return None
+
+
+def _format_home_assistant_allowed_actions(result: dict[str, Any]) -> str:
+    entities = list(result.get("allowed_entities") or [])
+    scenes = list(result.get("allowed_scenes") or [])
+    if not entities and not scenes:
+        return "\n".join(
+            [
+                "Aktuell sind keine Smart-Home-Aktionen freigegeben.",
+                "Ich schalte deshalb keine Geräte.",
+                "Trage erlaubte Geräte in app/config/home_assistant_action_allowlist.json ein.",
+                "",
+                "Alle Smart-Home-Aktionen benötigen vor der Ausführung eine Bestätigung.",
+            ]
+        )
+
+    lines = ["Freigegebene Smart-Home-Aktionen:"]
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("friendly_name") or entity.get("entity_id") or "Unbekannt")
+        entity_id = str(entity.get("entity_id") or "-")
+        actions = ", ".join(_german_ha_action(action) for action in entity.get("allowed_actions", []))
+        lines.append(f"- {name} ({entity_id}): {actions or 'keine Aktion'}")
+    for scene in scenes:
+        if isinstance(scene, dict):
+            name = str(scene.get("friendly_name") or scene.get("entity_id") or "Szene")
+            entity_id = str(scene.get("entity_id") or "-")
+        else:
+            name = str(scene)
+            entity_id = str(scene)
+        lines.append(f"- {name} ({entity_id}): aktivieren")
+
+    blocked = list(result.get("blocked_domains") or [])
+    if blocked:
+        lines.extend(["", "Blockierte Geräteklassen:"])
+        for domain in blocked:
+            lines.append(f"- {_german_blocked_domain(str(domain))}")
+    lines.extend(["", "Alle Smart-Home-Aktionen benötigen vor der Ausführung eine Bestätigung."])
+    return "\n".join(lines)
+
+
+def _format_home_assistant_action_candidates(result: dict[str, Any]) -> str:
+    candidates = list(result.get("candidates") or [])[:20]
+    lines = ["Schaltbare Kandidaten:"]
+    if not candidates:
+        lines.append("- Keine sicheren Kandidaten gefunden.")
+    for candidate in candidates:
+        name = str(candidate.get("friendly_name") or candidate.get("entity_id") or "Unbekannt")
+        entity_id = str(candidate.get("entity_id") or "-")
+        actions = ", ".join(_german_ha_action(action) for action in candidate.get("suggested_actions", []))
+        lines.append(f"- {name} ({entity_id}): {actions}")
+    lines.extend(["", "Ich habe nichts freigegeben und nichts geschaltet."])
+    return "\n".join(lines)
+
+
+def _find_candidate(candidates: list[Any], target: str) -> dict[str, Any] | None:
+    normalized_target = _normalize_plain(target)
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        entity_id = _normalize_plain(str(item.get("entity_id", "")))
+        friendly_name = _normalize_plain(str(item.get("friendly_name", "")))
+        if normalized_target in {entity_id, friendly_name} or normalized_target in friendly_name:
+            return item
+    return None
+
+
+def _german_ha_action(action: Any) -> str:
+    return {
+        "turn_on": "einschalten",
+        "turn_off": "ausschalten",
+    }.get(str(action), str(action))
+
+
+def _german_blocked_domain(domain: str) -> str:
+    return {
+        "lock": "Schlösser",
+        "alarm_control_panel": "Alarmanlagen",
+        "cover": "Türen, Garagen und Abdeckungen",
+        "climate": "Heizung und Klima",
+        "fan": "Ventilatoren",
+        "valve": "Ventile",
+        "siren": "Sirenen",
+        "camera": "Kameras",
+    }.get(domain, domain)
+
+
+def _normalize_plain(value: str) -> str:
+    value = _fold_german_text(value)
+    value = re.sub(r"[^a-z0-9_. ]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _is_unsafe_home_assistant_action_text(message: str) -> bool:
+    return any(
+        term in message
+        for term in (
+            "lock",
+            "schloss",
+            "haustuer",
+            "alarm",
+            "heizung",
+            "thermostat",
+            "garage",
+            "ofen",
+            "herd",
+            "pumpe",
+            "sps",
+            "plc",
+        )
+    )
+
+
+def _cleanup_home_assistant_target(message: str, remove_tokens: tuple[str, ...]) -> str:
+    target = message
+    for token in remove_tokens:
+        target = re.sub(rf"\b{re.escape(token)}\b", " ", target)
+    target = re.sub(r"[^a-z0-9_. ]+", " ", target)
+    return re.sub(r"\s+", " ", target).strip()
 
 
 def _is_file_search_intent(message: str) -> bool:
@@ -1088,7 +1651,18 @@ def _format_skill_answer(skill_name: str, result: dict[str, Any]) -> str:
 
 
 def _is_pending_actions_query(message: str) -> bool:
-    return any(term in message for term in ("was schlaegst du vor", "was schlÃ¤gst du vor", "welche aktionen stehen aus", "zeige aktionen"))
+    return any(
+        term in message
+        for term in (
+            "was schlaegst du vor",
+            "was schlÃ¤gst du vor",
+            "welche aktionen stehen aus",
+            "zeige aktionen",
+            "zeige offene aktionen",
+            "offene aktionen",
+            "welche aktionen sind offen",
+        )
+    )
 
 
 def _is_action_execute_intent(message: str) -> bool:
@@ -1112,6 +1686,26 @@ def _is_action_confirm_intent(message: str) -> bool:
     ) or any(term in folded for term in ("bestaetige", "bestatige", "confirm"))
 
 
+def _is_bare_action_confirmation(message: str) -> bool:
+    folded = _fold_german_text(message)
+    return folded in {"ja", "ja bestaetigen", "bestaetigen", "bestatigen", "ok", "okay", "mach es"}
+
+
+def _is_plural_action_confirmation(message: str) -> bool:
+    folded = _fold_german_text(message)
+    return any(
+        term in folded
+        for term in (
+            "bestaetige aktionen",
+            "bestatige aktionen",
+            "bestaetige alle aktionen",
+            "bestatige alle aktionen",
+            "fuehr alle aktionen aus",
+            "fuehre alle aktionen aus",
+        )
+    )
+
+
 def _is_action_reject_intent(message: str) -> bool:
     return any(term in message for term in ("aktion", "vorschlag")) and any(term in message for term in ("ablehnen", "verwerfen", "reject"))
 
@@ -1131,17 +1725,39 @@ def _leading_action_index(message: str) -> int | None:
 
 
 def _pending_action_from_message(message: str) -> dict[str, Any] | None:
+    normalized_message = _normalize_action_reference(message)
+    if normalized_message and not normalized_message.isdigit():
+        matched = _pending_action_by_title(normalized_message)
+        if matched:
+            return matched
     index = _action_index(message)
     if index is not None:
-        return _pending_action_by_index(index)
-    normalized_message = _normalize_action_reference(message)
+        action = _pending_action_by_index(index)
+        if action:
+            return action
     if not normalized_message:
         return None
+    return _pending_action_by_title(normalized_message)
+
+
+def _pending_action_by_title(normalized_message: str) -> dict[str, Any] | None:
     for action in pending_action_store.list_pending_actions():
         title = _normalize_action_reference(str(action.get("title") or ""))
-        if title and (title in normalized_message or normalized_message in title):
+        if title and _action_reference_matches(title, normalized_message):
             return action
     return None
+
+
+def _action_reference_matches(title: str, message: str) -> bool:
+    if title == message:
+        return True
+    title_tokens = set(title.split())
+    message_tokens = set(message.split())
+    if len(title_tokens) >= 2 and title_tokens.issubset(message_tokens):
+        return True
+    if len(message_tokens) >= 2 and message_tokens.issubset(title_tokens):
+        return True
+    return False
 
 
 def _is_action_reference(message: str) -> bool:
@@ -1158,10 +1774,7 @@ def _normalize_action_reference(value: str) -> str:
 
 
 def _pending_action_by_index(index: int) -> dict[str, Any] | None:
-    actions = pending_action_store.list_pending_actions()
-    if index < 1 or index > len(actions):
-        return None
-    return actions[index - 1]
+    return pending_action_store.resolve_presented_action(index)
 
 
 def _action_not_found_response() -> dict[str, Any]:
@@ -1174,9 +1787,20 @@ def _action_not_found_response() -> dict[str, Any]:
     }
 
 
+def _action_ambiguous_response(message: str) -> dict[str, Any]:
+    return {
+        "mode": "rule_based",
+        "tool": "action_execute",
+        "answer": message,
+        "risk": ActionRisk.GREEN,
+        "result": {"error": True, "ambiguous": True},
+    }
+
+
 def _append_pending_actions(answer: str, actions: list[dict[str, Any]]) -> str:
     if not actions:
         return answer
+    actions = pending_action_store.present_actions(actions, source=str(actions[0].get("source") or "chat"))
     return "\n\n".join([answer, _format_pending_actions(actions), "Sag: 'Führe Aktion 1 aus.'"])
 
 
@@ -1185,7 +1809,8 @@ def _format_pending_actions(actions: list[dict[str, Any]]) -> str:
         return "Es stehen aktuell keine Aktionen aus."
     lines = ["Mögliche nächste Aktionen:"]
     for index, action in enumerate(actions[:3], start=1):
-        lines.append(f"{index}. [{_risk_label(str(action.get('risk', 'GREEN')))}] {action.get('title')}")
+        display_index = action.get("display_index") or index
+        lines.append(f"{display_index}. [{_risk_label(str(action.get('risk', 'GREEN')))}] {action.get('title')}")
     return "\n".join(lines)
 
 
@@ -1228,6 +1853,17 @@ def _format_action_execution_answer(result: dict[str, Any]) -> str:
             if summary:
                 return f"{message}:\n{tool_result.get('path')}\n\n{summary}"
             return f"{message}:\n{tool_result.get('path')}"
+        if isinstance(tool_result, dict) and (tool_result.get("added") or tool_result.get("updated")):
+            actions = ", ".join(_german_ha_action(action) for action in tool_result.get("allowed_actions", []))
+            return (
+                f"{tool_result.get('friendly_name') or tool_result.get('entity_id')} wurde zur Smart-Home-Freigabe hinzugefügt.\n"
+                f"Aktionen: {actions}.\n"
+                "Trotz Freigabe braucht jede Ausführung weiterhin Bestätigung."
+            )
+        if isinstance(tool_result, dict) and "removed" in tool_result:
+            return str(tool_result.get("message") or "Entity wurde aus der Smart-Home-Freigabe entfernt.")
+        if isinstance(tool_result, dict) and tool_result.get("message"):
+            return f"Ausgeführt: {title}\n\n{tool_result.get('message')}"
         return f"Ausgeführt: {title}"
     if result.get("status") == "blocked":
         return "Diese Aktion wurde blockiert."
@@ -1248,6 +1884,181 @@ def _risk_label(risk: str) -> str:
         "YELLOW": "GELB",
         "RED": "ROT",
     }.get(risk.upper(), risk.upper())
+
+
+def _home_assistant_entity_catalog_route(
+    original: str,
+    normalized: str,
+) -> tuple[str, dict[str, Any]] | None:
+    if "synchronisiere home assistant entities" in normalized or "sync home assistant entities" in normalized:
+        return "home_assistant_sync_entities", {"force": True}
+    if "welche geraete kann ich freigeben" in normalized or "welche geräte kann ich freigeben" in normalized:
+        return "home_assistant_list_actionable_candidates", {"limit": 100}
+    if "freigabe-kandidaten" in normalized or "freigabe kandidaten" in normalized:
+        return "home_assistant_list_actionable_candidates", {"limit": 100}
+    domain_alias = _read_only_domain_alias(normalized)
+    if domain_alias:
+        return "home_assistant_list_entities", {"domain": domain_alias, "state": None, "limit": 100}
+    if "welche geraete sind unavailable" in normalized or "welche geräte sind unavailable" in normalized:
+        return "home_assistant_list_unavailable_entities", {"limit": 100}
+    if "home assistant" in normalized and "unavailable" in normalized:
+        return "home_assistant_list_unavailable_entities", {"limit": 100}
+    entity_match = re.search(r"(?:details zu|entity details zu|zeige details zu)\s+([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+)", original, re.I)
+    if entity_match:
+        return "home_assistant_get_entity", {"entity_id": entity_match.group(1)}
+    if "suche" in normalized and "home assistant" in normalized:
+        return "home_assistant_search_entities", {"query": _extract_ha_search_query(original), "domain": None, "limit": 50}
+    if "finde entität" in normalized or "finde entitaet" in normalized or "finde entity" in normalized:
+        return "home_assistant_search_entities", {"query": _extract_after_any(original, ("finde Entität", "finde Entitaet", "finde Entity")), "domain": None, "limit": 50}
+    return None
+
+
+def _is_home_assistant_control_intent(message: str) -> bool:
+    if "freigabe" in message or "was macht ecoflow" in message:
+        return False
+    control_terms = (
+        "schalte",
+        "einschalten",
+        "ausschalten",
+        "licht an",
+        "licht aus",
+        "alle lichter",
+        "starte szene",
+        "aktiviere",
+        "deaktivieren",
+        "temperatur",
+        "rollladen",
+        "öffnen",
+        "oeffnen",
+        "schließen",
+        "schliessen",
+    )
+    return any(term in message for term in control_terms) or bool(re.search(r"\bmach\b.+\b(an|aus)\b", message)) or bool(re.search(r"\b\d+(?:[,.]\d+)?\s*grad\b", message))
+
+
+def _read_only_domain_alias(message: str) -> str | None:
+    if not any(term in message for term in ("zeige", "liste", "welche", "alle", "gibt es")):
+        return None
+    aliases = (
+        (("heizungen", "thermostate", "climate entities", "klima"), "climate"),
+        (("lichter", "lichtgeräte", "lichtgeraete"), "light"),
+        (("switches", "schalter", "steckdosen", "smartsteckdosen"), "switch"),
+        (("rollläden", "rolllaeden", "rollladen"), "cover"),
+        (("szenen",), "scene"),
+        (("automationen",), "automation"),
+        (("skripte",), "script"),
+    )
+    for terms, domain in aliases:
+        if any(term in message for term in terms):
+            return domain
+    return None
+
+
+def _is_memory_store_command(message: str) -> bool:
+    return any(message.startswith(prefix) for prefix in ("merke dir", "speichere", "für die zukunft", "fuer die zukunft", "ab jetzt gilt", "das ist wichtig"))
+
+
+def _is_memory_recall_command(message: str) -> bool:
+    return any(prefix in message for prefix in ("was weißt du über", "was weisst du ueber", "was weisst du über", "was hast du dir", "zeige dein gedächtnis", "zeige dein gedaechtnis"))
+
+
+def _is_memory_forget_command(message: str) -> bool:
+    return message.startswith("vergiss") or "lösche aus deinem gedächtnis" in message or "loesche aus deinem gedaechtnis" in message or "entferne die erinnerung" in message
+
+
+def _is_ambiguous_correction(message: str) -> bool:
+    return message.startswith("nein,") and " ist " in message
+
+
+def _extract_memory_store_text(original: str) -> str:
+    cleaned = _strip_wake_prefix(original).strip()
+    cleaned = re.sub(r"^(merke dir,\s*dass|merke dir dass|merke dir|speichere,\s*dass|speichere dass|speichere|für die zukunft:|fuer die zukunft:|ab jetzt gilt:|das ist wichtig:)\s*", "", cleaned, flags=re.I)
+    return cleaned.strip(" .!?:,")
+
+
+def _extract_memory_query(original: str) -> str:
+    cleaned = _strip_wake_prefix(original).strip()
+    cleaned = re.sub(r"^(was weißt du über|was weisst du ueber|was weisst du über|zeige dein gedächtnis zu|zeige dein gedaechtnis zu)\s*", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"^was hast du dir\s+über\s+(.+?)\s+gemerkt\??$", r"\1", cleaned, flags=re.I)
+    return cleaned.strip(" .!?:,")
+
+
+def _extract_memory_forget_query(original: str) -> str:
+    cleaned = _strip_wake_prefix(original).strip()
+    cleaned = re.sub(r"^(vergiss|lösche aus deinem gedächtnis|loesche aus deinem gedaechtnis|entferne die erinnerung)\s*", "", cleaned, flags=re.I)
+    return cleaned.strip(" .!?:,")
+
+
+def _extract_correction_text(original: str) -> str:
+    return re.sub(r"^nein,\s*", "", _strip_wake_prefix(original).strip(), flags=re.I)
+
+
+def _format_ha_control_prepared(prepared: dict[str, Any], action: dict[str, Any]) -> str:
+    risk = str(prepared.get("risk", "YELLOW"))
+    lines = [
+        f"Ich kann {prepared.get('title', 'die Home-Assistant-Aktion vorbereiten')}.",
+        f"Risiko: {_risk_label(risk)}",
+    ]
+    if prepared.get("warning"):
+        lines.append(f"Warnung: {prepared['warning']}")
+    if risk == "ORANGE" and not prepared.get("warning"):
+        lines.append("Warnung: Diese Aktion kann Komfort, Energieverbrauch oder mechanische Bewegung beeinflussen.")
+    lines.extend(
+        [
+            "Diese Aktion benötigt Bestätigung.",
+            "Sag: 'Bestätige Aktion 1'.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _format_ha_control_auto_executed(result: dict[str, Any]) -> str:
+    if result.get("blocked"):
+        return str(result.get("message") or "Nicht ausgeführt: Diese Geräteklasse ist blockiert.")
+    title = str(result.get("title") or result.get("entity_id") or "Smart-Home-Aktion")
+    action = str(result.get("action") or "")
+    parameters = result.get("parameters") if isinstance(result.get("parameters"), dict) else {}
+    if action == "set_temperature" and "temperature" in parameters:
+        answer = f"Ausgeführt: {title.replace(' Temperatur setzen', '')} auf {float(parameters['temperature']):g} °C gesetzt."
+    elif action == "turn_on":
+        answer = f"Ausgeführt: {title.replace(' einschalten', '')} eingeschaltet."
+    elif action == "turn_off":
+        answer = f"Ausgeführt: {title.replace(' ausschalten', '')} ausgeschaltet."
+    else:
+        answer = f"Ausgeführt: {title}."
+    if result.get("auto_execute"):
+        answer += "\nAuto-Ausführung gemäß Smart-Home-Policy."
+    return answer
+
+
+def _format_ha_control_ambiguous(result: dict[str, Any]) -> str:
+    heating = str(result.get("message") or "").lower().startswith("ich habe mehrere passende heizungen")
+    lines = ["Ich habe mehrere passende Heizungen gefunden:" if heating else "Ich habe mehrere passende Geräte gefunden:"]
+    for index, entity in enumerate(result.get("candidates", [])[:10], start=1):
+        lines.append(f"{index}. {entity.get('friendly_name') or entity.get('entity_id')} ({entity.get('entity_id')})")
+    lines.append("Welche soll ich verwenden?" if heating else "Bitte sag genauer, welches Gerät ich vorbereiten soll.")
+    return "\n".join(lines)
+
+
+def _extract_ha_search_query(original: str) -> str:
+    cleaned = _strip_wake_prefix(original).strip(" .!?:,")
+    match = re.search(r"suche\s+(.+?)\s+in\s+home assistant", cleaned, re.I)
+    if match:
+        return match.group(1).strip(" .!?:,")
+    match = re.search(r"suche\s+(.+)$", cleaned, re.I)
+    if match:
+        query = re.sub(r"\s+in\s+home assistant.*$", "", match.group(1), flags=re.I)
+        return query.strip(" .!?:,")
+    return cleaned
+
+
+def _extract_after_any(original: str, markers: tuple[str, ...]) -> str:
+    folded = _strip_wake_prefix(original)
+    for marker in markers:
+        index = folded.lower().find(marker.lower())
+        if index >= 0:
+            return folded[index + len(marker):].strip(" .!?:,")
+    return folded.strip(" .!?:,")
 
 
 def _known_tool_route(
@@ -1417,6 +2228,99 @@ def _format_home_assistant_problems(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_home_assistant_entity_catalog(tool_name: str, result: dict[str, Any]) -> str:
+    if tool_name == "home_assistant_sync_entities":
+        return (
+            f"Home-Assistant-Entity-Katalog synchronisiert: {result.get('entity_count', 0)} Entities. "
+            f"Quelle: {result.get('source', 'unbekannt')}."
+        )
+    if tool_name == "home_assistant_list_actionable_candidates":
+        lines = ["Potentiell freigebbare Kandidaten:"]
+        entities = list(result.get("entities") or [])
+        if not entities:
+            return "Ich habe keine potenziell freigebbaren Home-Assistant-Entities gefunden."
+        for entity in entities[:20]:
+            lines.append(_format_entity_catalog_line(entity))
+        if any(entity.get("domain") == "switch" for entity in entities):
+            lines.append("")
+            lines.append("Switches nur freigeben, wenn klar ist, dass sie ungefährlich sind.")
+        lines.append("Der Katalog vergibt keine Schaltrechte. Freigabe und Ausführung bleiben bestätigungspflichtig.")
+        return "\n".join(lines)
+    if tool_name == "home_assistant_list_unavailable_entities":
+        entities = list(result.get("entities") or [])
+        if not entities:
+            return "Ich habe keine unavailable Entities im Home-Assistant-Entity-Katalog gefunden."
+        lines = ["Kritisch/unavailable:"]
+        for entity in entities[:20]:
+            lines.append(_format_entity_catalog_line(entity))
+        return "\n".join(lines)
+    if tool_name == "home_assistant_get_entity":
+        if not result.get("found"):
+            return str(result.get("message") or "Entity wurde nicht gefunden.")
+        return "Entity-Details:\n" + _format_entity_catalog_line(result.get("entity") or {})
+    entities = _sort_home_assistant_entities(list(result.get("entities") or []))
+    if tool_name == "home_assistant_list_entities" and result.get("domain") == "climate":
+        if not entities:
+            return (
+                "Ich habe keine Home-Assistant-Entities vom Typ climate gefunden.\n"
+                "Temperatursensoren wie sensor.wohnzimmer_rechts_temperatur sind nur Messwerte und können nicht gesteuert werden.\n"
+                "Bitte prüfe in Home Assistant, ob deine Tado-/Thermostat-Integration climate.* Entities bereitstellt."
+            )
+        lines = [f"Ich habe {result.get('count', len(entities))} Heizungs-/Thermostat-Entities gefunden:"]
+        for entity in entities[:20]:
+            lines.append(_format_climate_entity_line(entity))
+        return "\n".join(lines)
+    lines = [f"Ich habe {result.get('count', len(entities))} Home-Assistant-Entities gefunden:"]
+    for entity in entities[:20]:
+        lines.append(_format_entity_catalog_line(entity))
+    if not entities:
+        lines.append("- Keine passenden Entities gefunden.")
+    if tool_name == "home_assistant_search_entities":
+        lines.append("")
+        lines.append("Für Heizungssteuerung sind nur climate.* Entities relevant.")
+    return "\n".join(lines)
+
+
+def _format_entity_catalog_line(entity: dict[str, Any]) -> str:
+    friendly_name = entity.get("friendly_name") or entity.get("entity_id") or "-"
+    entity_id = entity.get("entity_id") or "-"
+    domain = entity.get("domain") or "-"
+    state = entity.get("state") or "-"
+    allowlisted = "ja" if entity.get("is_allowlisted") else "nein"
+    return f"- {friendly_name} | {entity_id} | {domain} | {state} | freigegeben: {allowlisted}"
+
+
+def _format_climate_entity_line(entity: dict[str, Any]) -> str:
+    parts = [
+        f"- {entity.get('friendly_name') or entity.get('entity_id') or '-'}",
+        str(entity.get("entity_id") or "-"),
+        f"Status: {entity.get('state') or '-'}",
+    ]
+    attributes = entity.get("attributes_summary") if isinstance(entity.get("attributes_summary"), dict) else {}
+    current = entity.get("current_temperature", attributes.get("current_temperature"))
+    target = entity.get("temperature", entity.get("target_temperature", attributes.get("temperature")))
+    if current is not None:
+        parts.append(f"aktuelle Temperatur: {current} °C")
+    if target is not None:
+        parts.append(f"Zieltemperatur: {target} °C")
+    return " | ".join(parts)
+
+
+def _sort_home_assistant_entities(entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    order = {
+        "climate": 0,
+        "light": 1,
+        "switch": 2,
+        "cover": 3,
+        "scene": 4,
+        "media_player": 5,
+        "remote": 6,
+        "sensor": 7,
+        "binary_sensor": 8,
+    }
+    return sorted(entities, key=lambda item: (order.get(str(item.get("domain")), 99), str(item.get("friendly_name") or item.get("entity_id"))))
+
+
 def _format_tool_result(tool_name: str, result: dict[str, Any]) -> str:
     if tool_name == "ecoflow_energy_overview":
         return format_ecoflow_energy_answer(result)
@@ -1428,6 +2332,8 @@ def _format_tool_result(tool_name: str, result: dict[str, Any]) -> str:
         return _format_timetree_today_answer(result)
     if tool_name == "home_assistant_get_problems":
         return _format_home_assistant_problems(result)
+    if tool_name.startswith("home_assistant_") and "entities" in tool_name:
+        return _format_home_assistant_entity_catalog(tool_name, result)
     return str(result.get("message", "Werkzeug wurde ausgefuehrt."))
 
 

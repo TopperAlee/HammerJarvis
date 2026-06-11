@@ -27,7 +27,8 @@ class ActionExecutor:
             return {"id": action_id, "status": action.get("status"), "message": "Aktion ist nicht mehr ausstehend."}
         if is_expired(action):
             action["status"] = "expired"
-            return {"id": action_id, "status": "expired", "message": "Aktion ist abgelaufen."}
+            write_audit_log("action_expired", {"action_id": action_id, "title": action.get("title"), "risk": action.get("risk"), "source": action.get("source"), "tool_name": action.get("tool_name")})
+            return {"id": action_id, "status": "expired", "message": "Diese Aktion ist abgelaufen. Bitte starte den Befehl erneut."}
 
         risk = ActionRisk(str(action.get("risk", ActionRisk.RED)))
         write_audit_log("assistant_action_start", {"action_id": action_id, "tool": action.get("tool_name"), "risk": risk})
@@ -36,7 +37,8 @@ class ActionExecutor:
             self.store.mark_blocked(action_id, result)
             write_audit_log("assistant_action_end", {"action_id": action_id, "status": "blocked"})
             return result
-        if risk == ActionRisk.YELLOW and not confirm:
+        if risk in {ActionRisk.YELLOW, ActionRisk.ORANGE} and not confirm:
+            write_audit_log("action_confirm_requested", {"action_id": action_id, "title": action.get("title"), "risk": risk, "source": action.get("source"), "tool_name": action.get("tool_name")})
             return {
                 "id": action_id,
                 "risk": risk,
