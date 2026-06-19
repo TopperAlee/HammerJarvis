@@ -43,14 +43,18 @@ class MemoryClassifier:
 
 def infer_memory_item(text: str) -> dict[str, Any]:
     cleaned = text.strip(" .!?:,")
-    device_match = re.search(r"\b([a-z_]+\.[a-zA-Z0-9_]+)\s+(?:ist|das|=)\s+(?:das|die|der)?\s*(.+)$", cleaned, re.I)
+    device_match = _device_relation(cleaned)
     if device_match:
+        key, value = device_match
+        domain = key.split(".", 1)[0]
         return {
             "type": "device",
-            "key": device_match.group(1).lower(),
-            "value": _title_value(device_match.group(2)),
-            "tags": ["home_assistant", "device"],
+            "key": key,
+            "value": value,
+            "tags": ["home_assistant", "smart_home", "alias", domain],
             "source": "user",
+            "confidence": "high",
+            "source_text": cleaned,
         }
     priority_match = re.search(r"(.+?)\s+unwichtig", cleaned, re.I)
     if priority_match:
@@ -70,7 +74,37 @@ def infer_memory_item(text: str) -> dict[str, Any]:
 
 
 def _title_value(value: str) -> str:
-    cleaned = value.strip(" .!?:,")
+    cleaned = _clean_relation_value(value)
     if cleaned.lower() == "flurlicht":
         return "Flur Licht"
     return cleaned[:1].upper() + cleaned[1:]
+
+
+def _device_relation(text: str) -> tuple[str, str] | None:
+    entity = r"([a-z_]+\.[a-z0-9_]+)"
+    patterns = (
+        rf"^{entity}\s*=\s*(.+)$",
+        rf"^{entity}\s+(?:ist|heißt|heisst|bedeutet|als)\s+(.+)$",
+        rf"^{entity}\s+(.+?)\s+(?:ist|bedeutet|heißt|heisst)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text.strip(), re.I)
+        if not match:
+            continue
+        key = match.group(1).lower()
+        value = _title_value(match.group(2))
+        if value:
+            return key, value
+    return None
+
+
+def _clean_relation_value(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value.strip(" .!?:,"))
+    cleaned = re.sub(r"^(das|der|die|mein|meine|meinen|meiner)\s+", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\s+(ist|bedeutet|heißt|heisst)$", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"^(das|der|die|mein|meine|meinen|meiner)\s+", "", cleaned, flags=re.I)
+    return cleaned.strip(" .!?:,")
+
+
+def normalize_relation_value(value: str) -> str:
+    return _clean_relation_value(value)

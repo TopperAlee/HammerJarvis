@@ -31,10 +31,40 @@ def test_memory_command_stores_device_memory(monkeypatch, tmp_path: Path) -> Non
     result = AssistantOrchestrator().handle_message("Merke dir, dass switch.hall das Flurlicht ist.")
 
     assert result["tool"] == "memory_add"
-    assert "gespeichert" in result["answer"]
+    assert "Gemerkte Information" in result["answer"]
     memories = MemoryStore().search_memory("switch.hall")
     assert memories["memories"][0]["type"] == "device"
     assert memories["memories"][0]["key"] == "switch.hall"
+
+
+def test_memory_command_normalizes_german_device_relation(monkeypatch, tmp_path: Path) -> None:
+    _configure_memory(monkeypatch, tmp_path)
+
+    result = AssistantOrchestrator().handle_message("Merke dir, dass switch.hall das Flur Licht ist.")
+    memory = MemoryStore().search_memory("switch.hall")["memories"][0]
+
+    assert memory["key"] == "switch.hall"
+    assert memory["value"] == "Flur Licht"
+    assert set(memory["tags"]) >= {"home_assistant", "smart_home", "alias", "switch"}
+    assert result["answer"] == "Gemerkte Information: switch.hall ist das Flur Licht."
+    assert "Flur Licht ist" not in result["answer"]
+
+
+def test_memory_parser_supports_relation_variants(monkeypatch, tmp_path: Path) -> None:
+    _configure_memory(monkeypatch, tmp_path)
+    commands = [
+        "Merke dir: switch.hall = Flur Licht",
+        "Speichere switch.hall als Flur Licht.",
+        "Merke dir, dass switch.hall Flur Licht bedeutet.",
+    ]
+
+    for command in commands:
+        MemoryStore().delete_memory(MemoryStore().add_memory({"key": "dummy", "value": "dummy"})["id"])
+        result = AssistantOrchestrator().handle_message(command)
+        memory = MemoryStore().search_memory("switch.hall")["memories"][0]
+        assert result["tool"] == "memory_add"
+        assert memory["value"] == "Flur Licht"
+        MemoryStore().delete_memory(memory["id"])
 
 
 def test_memory_recall_returns_stored_memory(monkeypatch, tmp_path: Path) -> None:
@@ -44,8 +74,55 @@ def test_memory_recall_returns_stored_memory(monkeypatch, tmp_path: Path) -> Non
     result = AssistantOrchestrator().handle_message("Was weißt du über switch.hall?")
 
     assert result["tool"] == "memory_search"
-    assert "switch.hall" in result["answer"]
-    assert "Flur Licht" in result["answer"]
+    assert result["answer"] == "Ich weiß: switch.hall ist das Flur Licht."
+
+
+def test_memory_recall_plural_formatting(monkeypatch, tmp_path: Path) -> None:
+    _configure_memory(monkeypatch, tmp_path)
+    MemoryStore().add_memory({"type": "device", "key": "switch.hall", "value": "Flur Licht"})
+    MemoryStore().add_memory({"type": "device", "key": "switch.kueche", "value": "Küche Licht"})
+
+    one = AssistantOrchestrator().handle_message("Was weißt du über switch.hall?")
+    many = AssistantOrchestrator().handle_message("Was weißt du über Licht?")
+    none = AssistantOrchestrator().handle_message("Was weißt du über unbekannt?")
+
+    assert "Erinnerung(en)" not in one["answer"]
+    assert "Ich weiß:" in one["answer"]
+    assert "Ich habe 2 passende Erinnerungen gefunden:" in many["answer"]
+    assert none["answer"] == "Ich habe keine passende Erinnerung gefunden."
+
+
+def test_malformed_device_memory_is_updated_not_duplicated(monkeypatch, tmp_path: Path) -> None:
+    _configure_memory(monkeypatch, tmp_path)
+    existing = MemoryStore().add_memory({"type": "device", "key": "switch.hall", "value": "Flur Licht ist"})
+
+    result = AssistantOrchestrator().handle_message("Merke dir, dass switch.hall das Flur Licht ist.")
+    memories = MemoryStore().list_memory()["memories"]
+
+    assert result["answer"] == "Erinnerung aktualisiert: switch.hall ist das Flur Licht."
+    assert len(memories) == 1
+    assert memories[0]["id"] == existing["id"]
+    assert memories[0]["created_at"] == existing["created_at"]
+    assert memories[0]["value"] == "Flur Licht"
+    assert memories[0]["updated_at"] >= existing["updated_at"]
+
+
+def test_memory_repair_dry_run_and_apply(monkeypatch, tmp_path: Path) -> None:
+    _configure_memory(monkeypatch, tmp_path)
+    MemoryStore().add_memory({"type": "device", "key": "switch.hall", "value": "Flur Licht ist"})
+    MemoryStore().add_memory({"type": "fact", "key": "regel", "value": "unter 20 Prozent wichtig ist"})
+
+    dry_run = client.post("/assistant/memory/repair", json={"dry_run": True})
+    unchanged = MemoryStore().search_memory("switch.hall")["memories"][0]
+    applied = client.post("/assistant/memory/repair", json={"dry_run": False})
+    repaired = MemoryStore().search_memory("switch.hall")["memories"][0]
+    fact = MemoryStore().search_memory("regel")["memories"][0]
+
+    assert dry_run.json()["repairable"] == 1
+    assert unchanged["value"] == "Flur Licht ist"
+    assert applied.json()["changes"][0]["new_value"] == "Flur Licht"
+    assert repaired["value"] == "Flur Licht"
+    assert fact["value"] == "unter 20 Prozent wichtig ist"
 
 
 def test_api_keys_are_not_stored(monkeypatch, tmp_path: Path) -> None:

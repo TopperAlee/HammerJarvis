@@ -17,6 +17,7 @@ from app.assistant.actions.pending_action_store import pending_action_store
 from app.assistant.orchestrator import AssistantOrchestrator
 from app.assistant.llm_client import LLMClient, sanitize_identity_response
 from app.assistant.llm.native_ollama_client import NativeOllamaClient
+from app.assistant.knowledge.knowledge_store import KnowledgeStore
 from app.assistant.memory.memory_classifier import MemoryClassifier
 from app.assistant.memory.memory_store import MemoryStore
 from app.assistant.performance.metrics_store import metrics_store
@@ -196,6 +197,15 @@ class MemoryPatchRequest(BaseModel):
     tags: list[str] | None = None
     confidence: str | None = None
     protected: bool | None = None
+
+
+class MemoryRepairRequest(BaseModel):
+    dry_run: bool = True
+
+
+class KnowledgeIndexRequest(BaseModel):
+    path: str = Field(min_length=1)
+    recursive: bool = True
 
 
 class EntityActionRequest(BaseModel):
@@ -1304,9 +1314,38 @@ def assistant_memory_delete(memory_id: str) -> dict[str, Any]:
     return MemoryStore().delete_memory(memory_id)
 
 
+@app.post("/assistant/memory/repair")
+def assistant_memory_repair(request: MemoryRepairRequest) -> dict[str, Any]:
+    return MemoryStore().repair_memory_values(dry_run=request.dry_run)
+
+
 @app.post("/assistant/memory/export")
 def assistant_memory_export() -> dict[str, Any]:
     return MemoryStore().export_memory()
+
+
+@app.get("/assistant/knowledge/status")
+def assistant_knowledge_status() -> dict[str, Any]:
+    return KnowledgeStore().status()
+
+
+@app.post("/assistant/knowledge/index")
+def assistant_knowledge_index(request: KnowledgeIndexRequest) -> dict[str, Any]:
+    store = KnowledgeStore()
+    path = Path(request.path)
+    if path.is_dir() and request.recursive:
+        return store.index_directory(path)
+    return store.index_text_file(path)
+
+
+@app.get("/assistant/knowledge/search")
+def assistant_knowledge_search(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1, le=50)) -> dict[str, Any]:
+    return KnowledgeStore().search_knowledge(q, limit=limit)
+
+
+@app.get("/assistant/knowledge/documents")
+def assistant_knowledge_documents() -> dict[str, Any]:
+    return KnowledgeStore().list_documents()
 
 
 @app.get("/assistant/calendar/today")

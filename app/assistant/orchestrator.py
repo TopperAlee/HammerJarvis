@@ -9,6 +9,7 @@ from app.assistant.actions.action_executor import ActionExecutor
 from app.assistant.actions.action_planner import ActionPlanner
 from app.assistant.actions.pending_action_store import pending_action_store
 from app.assistant.formatters.ecoflow_formatter import format_ecoflow_energy_answer
+from app.assistant.knowledge.knowledge_store import KnowledgeStore
 from app.assistant.llm_client import LLMClient, sanitize_identity_response
 from app.assistant.memory.memory_classifier import MemoryClassifier, infer_memory_item
 from app.assistant.memory.memory_formatter import format_memory_added, format_memory_list
@@ -42,6 +43,9 @@ class AssistantOrchestrator:
         memory_response = self._handle_memory_command(message, normalized)
         if memory_response:
             return memory_response
+        knowledge_response = self._handle_knowledge_command(message, normalized)
+        if knowledge_response:
+            return knowledge_response
         priority_feedback = _handle_priority_feedback(message)
         if priority_feedback:
             return priority_feedback
@@ -483,6 +487,28 @@ class AssistantOrchestrator:
                 "risk": ActionRisk.GREEN,
                 "pending_actions": presented_actions,
                 "result": {"suggested": infer_memory_item(text_to_store)},
+            }
+        return None
+
+    def _handle_knowledge_command(self, original: str, normalized: str) -> dict[str, Any] | None:
+        if _is_knowledge_search_command(normalized):
+            query = _extract_knowledge_search_query(original)
+            result = KnowledgeStore().search_knowledge(query, limit=8)
+            return {
+                "mode": "rule_based",
+                "tool": "knowledge_search",
+                "answer": _format_knowledge_search_answer(result),
+                "risk": ActionRisk.GREEN,
+                "result": result,
+            }
+        if _is_knowledge_documents_command(normalized):
+            result = KnowledgeStore().list_documents()
+            return {
+                "mode": "rule_based",
+                "tool": "knowledge_documents",
+                "answer": _format_knowledge_documents_answer(result),
+                "risk": ActionRisk.GREEN,
+                "result": result,
             }
         return None
 
@@ -1966,6 +1992,22 @@ def _is_memory_forget_command(message: str) -> bool:
     return message.startswith("vergiss") or "lösche aus deinem gedächtnis" in message or "loesche aus deinem gedaechtnis" in message or "entferne die erinnerung" in message
 
 
+def _is_knowledge_search_command(message: str) -> bool:
+    return any(
+        term in message
+        for term in (
+            "suche im wissensspeicher",
+            "was weißt du aus meinen dokumenten",
+            "was weisst du aus meinen dokumenten",
+            "wissensspeicher nach",
+        )
+    )
+
+
+def _is_knowledge_documents_command(message: str) -> bool:
+    return any(term in message for term in ("welche dokumente kennst du", "zeige wissensspeicher dokumente"))
+
+
 def _is_ambiguous_correction(message: str) -> bool:
     return message.startswith("nein,") and " ist " in message
 
@@ -1986,6 +2028,18 @@ def _extract_memory_query(original: str) -> str:
 def _extract_memory_forget_query(original: str) -> str:
     cleaned = _strip_wake_prefix(original).strip()
     cleaned = re.sub(r"^(vergiss|lösche aus deinem gedächtnis|loesche aus deinem gedaechtnis|entferne die erinnerung)\s*", "", cleaned, flags=re.I)
+    return cleaned.strip(" .!?:,")
+
+
+def _extract_knowledge_search_query(original: str) -> str:
+    cleaned = _strip_wake_prefix(original).strip(" .!?:,")
+    patterns = (
+        r"^suche im wissensspeicher nach\s+",
+        r"^was wei(?:ß|ss)t du aus meinen dokumenten (?:über|ueber)\s+",
+        r"^wissensspeicher nach\s+",
+    )
+    for pattern in patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.I)
     return cleaned.strip(" .!?:,")
 
 
@@ -2319,6 +2373,35 @@ def _sort_home_assistant_entities(entities: list[dict[str, Any]]) -> list[dict[s
         "binary_sensor": 8,
     }
     return sorted(entities, key=lambda item: (order.get(str(item.get("domain")), 99), str(item.get("friendly_name") or item.get("entity_id"))))
+
+
+def _format_knowledge_search_answer(result: dict[str, Any]) -> str:
+    results = list(result.get("results") or [])
+    if not results:
+        return "Ich habe im lokalen Wissensspeicher keine passenden Quellen gefunden."
+    lines = [f"Ich habe {result.get('count', len(results))} Treffer im lokalen Wissensspeicher gefunden:"]
+    for index, item in enumerate(results[:5], start=1):
+        lines.append(f"{index}. {item.get('document_name')} [Chunk {item.get('chunk_index')}]")
+        snippet = str(item.get("snippet") or "").strip()
+        if snippet:
+            lines.append(f"   {snippet}")
+    sources = result.get("sources") or []
+    if sources:
+        lines.append("")
+        lines.append("Quellen:")
+        for source in sources[:5]:
+            lines.append(f"- {source.get('name')}")
+    return "\n".join(lines)
+
+
+def _format_knowledge_documents_answer(result: dict[str, Any]) -> str:
+    documents = list(result.get("documents") or [])
+    if not documents:
+        return "Der lokale Wissensspeicher enthält noch keine Dokumente."
+    lines = [f"Ich kenne {result.get('count', len(documents))} Dokumente:"]
+    for document in documents[:20]:
+        lines.append(f"- {document.get('name')} ({document.get('chunk_count', 0)} Chunks)")
+    return "\n".join(lines)
 
 
 def _format_tool_result(tool_name: str, result: dict[str, Any]) -> str:

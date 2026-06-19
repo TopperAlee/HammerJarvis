@@ -16,6 +16,10 @@ app/data/home_assistant/*.json
 app/data/memory/*.json
 app/data/memory/*.db
 app/data/memory/*.sqlite
+app/data/knowledge/*.json
+app/data/knowledge/*.sqlite
+app/data/knowledge/*.db
+app/data/knowledge/indexes/**
 app/data/local/**
 app/data/**/*.db
 app/data/**/*.sqlite

@@ -3,7 +3,7 @@ from typing import Any
 from uuid import uuid4
 
 
-MEMORY_TYPES = {"fact", "preference", "correction", "project", "device", "safety_rule", "relationship", "task_context"}
+MEMORY_TYPES = {"fact", "preference", "correction", "project", "device", "safety_rule", "alias", "relationship", "task_context"}
 
 
 def build_memory_item(data: dict[str, Any]) -> dict[str, Any]:
@@ -23,4 +23,5 @@ def build_memory_item(data: dict[str, Any]) -> dict[str, Any]:
         "updated_at": str(data.get("updated_at") or now),
         "last_used_at": str(data.get("last_used_at") or ""),
         "protected": bool(data.get("protected", False)),
+        "source_text": str(data.get("source_text") or ""),
     }

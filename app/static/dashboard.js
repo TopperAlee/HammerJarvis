@@ -85,6 +85,14 @@ function bindElements() {
     "memoryAddInput",
     "memoryAddButton",
     "memoryResults",
+    "refreshKnowledge",
+    "knowledgeStatus",
+    "knowledgeSearchInput",
+    "knowledgeSearchButton",
+    "knowledgeIndexInput",
+    "knowledgeIndexButton",
+    "knowledgeResults",
+    "knowledgeDocuments",
     "refreshActions",
     "pendingActions",
     "runWatchers",
@@ -301,6 +309,25 @@ function renderMemory(memory) {
     await refreshMemory();
   });
   wrapper.appendChild(deleteButton);
+  return wrapper;
+}
+
+function renderKnowledgeResult(result) {
+  const wrapper = document.createElement("span");
+  wrapper.textContent = `${result.document_name || "-"} [Chunk ${result.chunk_index ?? "-"}]`;
+  if (result.snippet) {
+    const snippet = document.createElement("div");
+    snippet.className = "muted";
+    snippet.textContent = result.snippet;
+    wrapper.appendChild(snippet);
+  }
+  return wrapper;
+}
+
+function renderKnowledgeDocument(document) {
+  const wrapper = document.createElement("span");
+  wrapper.textContent = `${document.name || "-"} · ${document.chunk_count ?? 0} Chunks`;
+  appendCode(wrapper, document.path);
   return wrapper;
 }
 
@@ -799,6 +826,46 @@ async function addMemory() {
   await refreshMemory();
 }
 
+async function refreshKnowledge() {
+  try {
+    const status = await fetchJson("/assistant/knowledge/status");
+    const documents = await fetchJson("/assistant/knowledge/documents");
+    setText("knowledgeStatus", `${status.document_count ?? 0} Dokument(e), ${status.chunk_count ?? 0} Chunk(s).`);
+    renderList(elements.knowledgeDocuments, documents.documents || [], renderKnowledgeDocument, "Keine Dokumente indexiert.");
+  } catch (error) {
+    setText("knowledgeStatus", "Wissensspeicher konnte nicht geladen werden.");
+  }
+}
+
+async function searchKnowledge() {
+  const query = text(elements.knowledgeSearchInput.value, "").trim();
+  if (!query) {
+    return refreshKnowledge();
+  }
+  try {
+    const data = await fetchJson(`/assistant/knowledge/search?q=${encodeURIComponent(query)}`);
+    setText("knowledgeStatus", `${data.count ?? 0} Wissenstreffer.`);
+    renderList(elements.knowledgeResults, data.results || [], renderKnowledgeResult, "Keine passenden Wissens-Chunks.");
+  } catch (error) {
+    setText("knowledgeStatus", "Wissenssuche fehlgeschlagen.");
+  }
+}
+
+async function indexKnowledgePath() {
+  const path = text(elements.knowledgeIndexInput.value, "").trim();
+  if (!path) {
+    return;
+  }
+  try {
+    const data = await postJson("/assistant/knowledge/index", { path, recursive: true });
+    setText("knowledgeStatus", data.message || `${data.count ?? 0} Datei(en) indexiert.`);
+    elements.knowledgeIndexInput.value = "";
+    await refreshKnowledge();
+  } catch (error) {
+    setText("knowledgeStatus", "Indexierung fehlgeschlagen.");
+  }
+}
+
 async function prepareHaControlCommand() {
   const command = text(elements.haControlCommandInput.value, "").trim();
   if (!command) {
@@ -912,6 +979,7 @@ async function refreshDashboard() {
       refreshSmartHomeAutoPolicy(),
       refreshHaControlPolicy(),
       refreshMemory(),
+      refreshKnowledge(),
       refreshActions(),
       refreshPerformance(),
     ];
@@ -1014,6 +1082,19 @@ function wireEvents() {
   elements.memoryAddInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       addMemory();
+    }
+  });
+  elements.refreshKnowledge.addEventListener("click", refreshKnowledge);
+  elements.knowledgeSearchButton.addEventListener("click", searchKnowledge);
+  elements.knowledgeIndexButton.addEventListener("click", indexKnowledgePath);
+  elements.knowledgeSearchInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      searchKnowledge();
+    }
+  });
+  elements.knowledgeIndexInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      indexKnowledgePath();
     }
   });
   elements.refreshActions.addEventListener("click", refreshActions);
