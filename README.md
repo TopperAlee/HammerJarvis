@@ -81,6 +81,20 @@ Die Sprachsteuerung nutzt die Web Speech API des Browsers.
 Falls die Spracherkennung nicht verfügbar ist, verwende Chrome oder Edge.
 Es gibt in v0.2 noch kein Wake Word und keinen Always-Listening-Modus.
 
+### Sprachausgabe
+
+Hammer Jarvis verwendet aktuell die Browser-Web-Speech-API fuer die lokale
+Sprachausgabe im Dashboard. Die tatsaechliche Sprachqualitaet haengt von den
+auf Windows und im verwendeten Browser verfuegbaren Stimmen ab.
+
+Im Dashboard kann eine verfuegbare deutsche Stimme ausgewaehlt werden. Die
+Auswahl wird lokal im Browser per `localStorage` gespeichert und beim naechsten
+Oeffnen wiederhergestellt, sofern die Stimme weiterhin verfuegbar ist.
+
+Es werden keine Sprachdaten an einen neu eingebauten externen TTS-Dienst
+uebertragen. Browser-TTS ist weiterhin eine Zwischenloesung und keine neuronale
+Jarvis-Stimme.
+
 ## Hammer Jarvis Agent v0.3
 
 Der neue Agent-Orchestrator ist ueber diesen lokalen Endpunkt erreichbar:

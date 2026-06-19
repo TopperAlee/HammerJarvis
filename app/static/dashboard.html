@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
-    <link rel="stylesheet" href="/static/dashboard.css?v=jarvis-hud-1">
+    <link rel="stylesheet" href="/static/dashboard.css?v=voice-bootstrap-20260619">
   </head>
   <body>
     <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
@@ -55,6 +55,23 @@
 
         <section id="errorPanel" class="error-panel" hidden>
           Verbindung zum Hammer-Jarvis-Backend fehlgeschlagen.
+        </section>
+
+        <section id="activityPanel" class="activity-panel" role="status" aria-live="polite">
+          <div class="activity-heading">
+            <span>Systemaktivität</span>
+            <button id="clearActivities" class="ghost-button small-action" type="button">Abgeschlossene ausblenden</button>
+          </div>
+          <div class="activity-columns">
+            <div>
+              <h2>Aktive Vorgänge</h2>
+              <ul id="activeActivities" class="activity-list"></ul>
+            </div>
+            <div>
+              <h2>Kürzlich abgeschlossen</h2>
+              <ul id="recentActivities" class="activity-list"></ul>
+            </div>
+          </div>
         </section>
 
         <section class="hud-grid">
@@ -328,6 +345,20 @@
               <span>Chat Konsole</span>
               <button id="speechToggle" class="ghost-button" type="button">Sprachausgabe: Ein</button>
             </div>
+            <div class="speech-settings" id="voiceLoadingPanel" aria-busy="false">
+              <label for="voiceSelect">Stimme</label>
+              <select id="voiceSelect" aria-label="Deutsche Stimme fuer die Sprachausgabe">
+                <option value="">Stimmen werden geladen...</option>
+              </select>
+              <button id="reloadVoices" class="ghost-button small-action" type="button">Stimmen erneut suchen</button>
+              <div class="voice-loading-status" role="status" aria-live="polite">
+                <span id="voiceLoadingIndicator" class="voice-loading-spinner" aria-hidden="true"></span>
+                <span id="voiceStatusText">Browser-Stimmen werden geladen</span>
+              </div>
+              <span id="voiceProgressText" aria-hidden="true">Versuch 1 von 6 · 0 Sekunden</span>
+              <span id="voiceSelectStatus">Browser-Stimmen werden geladen.</span>
+              <span id="voiceDiagnosticText">TTS API: wird geprüft · getVoices(): - · Zustand: idle</span>
+            </div>
             <div id="chatLog" class="chat-log" aria-live="polite">
               <div class="chat-message assistant">
                 <span>Jarvis</span>
@@ -362,6 +393,6 @@
       </main>
     </div>
 
-    <script src="/static/dashboard.js?v=jarvis-hud-1"></script>
+    <script src="/static/dashboard.js?v=voice-bootstrap-20260619" defer></script>
   </body>
 </html>

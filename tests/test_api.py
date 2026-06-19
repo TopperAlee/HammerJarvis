@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 from app.main import app
 
@@ -36,6 +37,215 @@ def test_dashboard_hud_static_assets_are_present() -> None:
     assert "HAMMER JARVIS HUD DASHBOARD v2" in html_response.text
     assert ".jarvis-core" in css_response.text
     assert "initDashboard" in js_response.text
+
+
+def test_dashboard_speech_voice_selector_assets_are_present() -> None:
+    html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
+    css = Path("app/static/dashboard.css").read_text(encoding="utf-8")
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert 'id="voiceSelect"' in html
+    assert 'id="voiceSelectStatus"' in html
+    assert '"voiceSelect"' in js
+    assert '"voiceSelectStatus"' in js
+    assert '"voiceLoadingPanel"' in js
+    assert '"voiceStatusText"' in js
+    assert '"voiceProgressText"' in js
+    assert '"voiceDiagnosticText"' in js
+    assert "speech-settings" in css
+    assert "speechVoiceStorageKey" in js
+    assert "startVoiceLoadingCycle" in js
+    assert "applyAvailableVoices" in js
+    assert "choosePreferredGermanVoice" in js
+    assert "populateVoiceSelectFromState" in js
+    assert "localStorage.setItem" in js
+    assert "localStorage.getItem" in js
+
+
+def test_dashboard_speech_preparation_and_chunking_are_present() -> None:
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert "prepareSpeechText" in js
+    assert "splitSpeechText" in js
+    assert "Ein technischer Codeabschnitt wurde ausgelassen." in js
+    assert "Link ausgelassen." in js
+    assert "targetChunkLength: 220" in js
+    assert "maxChunkLength: 260" in js
+    assert "speechRunId" in js
+    assert "cancelSpeechOutput" in js
+    assert "window.speechSynthesis.cancel()" in js
+
+
+def test_dashboard_speech_voice_loading_is_bounded_and_final() -> None:
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert "window.speechSynthesis.getVoices()" in js
+    assert "voiceschanged" in js
+    assert "const VOICE_RETRY_DELAYS_MS = [0, 100, 300, 750, 1500, 3000]" in js
+    assert "const VOICE_LOAD_WATCHDOG_MS = 5500" in js
+    assert "const VOICE_LOAD_STATES = {" in js
+    assert 'EMPTY: "empty"' in js
+    assert "voiceLoadGeneration" in js
+    assert "clearVoiceLoadTimers" in js
+    assert "Keine Browser-Stimmen verfügbar" in js
+    assert "Keine Stimmen nach 5 Sekunden. Windows-Sprachpakete oder Browser prüfen." in js
+    assert "keine deutsche Stimme gefunden" in js
+    assert "Sprachausgabe nicht unterstützt" in js
+    assert "getValidSpeechVoices" in js
+    assert "try {" in js
+    assert "console.error(\"[Hammer Jarvis Voice]" in js
+    assert "scheduleSpeechVoiceRetries" not in js
+    assert "refreshSpeechVoices" not in js
+
+
+def test_dashboard_activity_panel_assets_are_present() -> None:
+    html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
+    css = Path("app/static/dashboard.css").read_text(encoding="utf-8")
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert '<section id="activityPanel"' in html
+    assert 'role="status"' in html
+    assert 'aria-live="polite"' in html
+    assert 'id="activeActivities"' in html
+    assert 'id="recentActivities"' in html
+    assert 'id="clearActivities"' in html
+    assert ".activity-panel" in css
+    assert ".activity-spinner" in css
+    assert ".button-loading" in css
+    assert "@media (prefers-reduced-motion: reduce)" in css
+    assert "function startActivity" in js
+    assert "function updateActivity" in js
+    assert "function finishActivity" in js
+    assert "function failActivity" in js
+    assert "function timeoutActivity" in js
+    assert "function cancelActivity" in js
+    assert "renderActivities" in js
+    assert "withButtonLoading" in js
+    assert "Zeitüberschreitung" in js
+
+
+def test_dashboard_fetches_are_timeout_bounded() -> None:
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert "const fetchTimeoutMs = 15000" in js
+    assert "new AbortController()" in js
+    assert "controller.abort(\"timeout\")" in js
+    assert "timeoutMs" in js
+    assert "timeoutError.kind = \"timeout\"" in js
+    assert "Dashboard wird aktualisiert" in js
+    assert "0 von" in js
+
+
+def test_dashboard_voice_reload_and_retry_progress_are_present() -> None:
+    html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert 'id="reloadVoices"' in html
+    assert 'id="voiceLoadingIndicator"' in html
+    assert 'id="voiceStatusText"' in html
+    assert 'id="voiceProgressText"' in html
+    assert 'id="voiceDiagnosticText"' in html
+    assert 'aria-busy="false"' in html
+    assert 'role="status"' in html
+    assert "reloadSpeechVoices" in js
+    assert "VOICE_RETRY_DELAYS_MS.length" in js
+    assert "Versuch ${attempt} von" in js
+    assert "läuft seit" in js
+    assert "Keine Stimmen nach 5 Sekunden" in js
+    assert "Windows-Sprachpakete oder Browser prüfen" in js
+    assert "Spracherkennung läuft" in js
+    assert "Jarvis spricht" in js
+
+
+def test_dashboard_voice_loading_state_machine_assets_are_present() -> None:
+    html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
+    css = Path("app/static/dashboard.css").read_text(encoding="utf-8")
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert "VOICE_LOAD_STATES" in js
+    for state in ["idle", "loading", "success", "empty", "unsupported", "error", "cancelled"]:
+        assert state in js
+    assert "voiceLoadState" in js
+    assert "voiceLoadAttempt" in js
+    assert "voiceLoadStartTime" in js
+    assert "voiceLoadTimers" in js
+    assert "voiceLoadElapsedTimer" in js
+    assert "voiceLoadInProgress" in js
+    assert "generation !== voiceLoadGeneration" in js
+    assert "VOICE_LOAD_WATCHDOG_MS" in js
+    assert "clearVoiceLoadTimers" in js
+    assert ".voice-loading-spinner" in css
+    assert "@keyframes voiceSpin" in css
+    assert "@media (prefers-reduced-motion: reduce)" in css
+    assert "TTS API:" in html
+    assert "getVoices():" in html
+
+
+def test_dashboard_voice_init_order_is_deterministic() -> None:
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+    init_body = js[js.index("function initDashboard()") :]
+
+    assert init_body.index("bindElements();") < init_body.index("wireEvents();")
+    assert init_body.index("wireEvents();") < init_body.index("initializeVoiceSubsystemSafely();")
+    assert init_body.index("initializeVoiceSubsystemSafely();") < init_body.index("initializeRemainingDashboardSafely();")
+    assert "function initializeVoiceSubsystemSafely()" in js
+    assert "startVoiceLoadingCycle();" in js
+    assert "function initializeRemainingDashboardSafely()" in js
+    assert "refreshDashboard();" in js[js.index("function initializeRemainingDashboardSafely()") :]
+
+
+def test_dashboard_bootstrap_handles_loaded_and_loading_dom() -> None:
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert "function bootstrapDashboard()" in js
+    assert "let dashboardInitialized = false" in js
+    assert "if (dashboardInitialized)" in js
+    assert "dashboardInitialized = true" in js
+    assert 'document.readyState === "loading"' in js
+    assert 'document.addEventListener("DOMContentLoaded", bootstrapDashboard, { once: true })' in js
+    assert "bootstrapDashboard();" in js
+    assert 'document.addEventListener("DOMContentLoaded", initDashboard)' not in js
+
+
+def test_dashboard_voice_bootstrap_is_isolated_and_visible() -> None:
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert "function initializeVoiceSubsystemSafely()" in js
+    assert "renderVoiceInitializationError" in js
+    assert "validateVoiceDomElements" in js
+    assert "requiredVoiceElementIds" in js
+    assert "Bootstrap beendet, aber Zustand blieb idle" in js
+    assert "Fehlende Voice-DOM-Elemente" in js
+    assert "function reloadSpeechVoices()" in js
+    assert "startVoiceLoadingCycle();" in js
+    assert "wireDashboardEvents" in js
+
+
+def test_dashboard_build_marker_and_cache_busting_are_present() -> None:
+    html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert 'src="/static/dashboard.js?v=voice-bootstrap-20260619" defer' in html
+    assert 'const DASHBOARD_BUILD = "voice-bootstrap-20260619"' in js
+    assert "dashboard.js geladen" in js
+    assert "document.documentElement.dataset.dashboardBuild = DASHBOARD_BUILD" in js
+    assert "Build: ${DASHBOARD_BUILD}" in js
+
+
+def test_dashboard_global_error_handlers_are_registered() -> None:
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert "registerGlobalDashboardErrorHandlers();" in js
+    assert 'window.addEventListener("error"' in js
+    assert 'window.addEventListener("unhandledrejection"' in js
+    assert "Dashboard-Laufzeitfehler" in js
+    assert "Unbehandelte Dashboard-Promise" in js
+
+
+def test_no_node_or_npm_system_was_added() -> None:
+    assert not Path("package.json").exists()
+    assert not Path("package-lock.json").exists()
+    assert not Path("node_modules").exists()
 
 
 def test_chat_fallback() -> None:

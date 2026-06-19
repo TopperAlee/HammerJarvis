@@ -1,11 +1,86 @@
+const DASHBOARD_BUILD = "voice-bootstrap-20260619";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
+const fetchTimeoutMs = 15000;
+const activityRefreshMs = 500;
+const completedActivityMaxAgeMs = 12000;
+const failedActivityMaxAgeMs = 30000;
+const speechVoiceStorageKey = "hammerJarvisSpeechVoice";
+const speechDefaults = {
+  lang: "de-DE",
+  rate: 0.94,
+  pitch: 0.96,
+  volume: 1.0,
+  targetChunkLength: 220,
+  maxChunkLength: 260,
+};
+const VOICE_LOAD_STATES = {
+  IDLE: "idle",
+  LOADING: "loading",
+  SUCCESS: "success",
+  EMPTY: "empty",
+  UNSUPPORTED: "unsupported",
+  ERROR: "error",
+  CANCELLED: "cancelled",
+};
+const VOICE_RETRY_DELAYS_MS = [0, 100, 300, 750, 1500, 3000];
+const VOICE_LOAD_WATCHDOG_MS = 5500;
+const VOICE_LOAD_ELAPSED_UPDATE_MS = 250;
 let speechOutputEnabled = true;
 let isListening = false;
 let dashboardRefreshInFlight = false;
 let lastEntityCatalogRefresh = 0;
+let speechVoices = [];
+let speechVoicesListenerRegistered = false;
+let speechRunId = 0;
+let chatActivityId = "";
+let speechActivityId = "";
+let recognitionActivityId = "";
+let activityTimer = null;
+let voiceLoadState = VOICE_LOAD_STATES.IDLE;
+let voiceLoadGeneration = 0;
+let voiceLoadAttempt = 0;
+let voiceLoadStartTime = 0;
+let voiceLoadTimers = [];
+let voiceLoadElapsedTimer = null;
+let voiceLoadInProgress = false;
+let voiceLoadDiagnosticsLogged = false;
+let dashboardInitialized = false;
 
 const elements = {};
+const activities = new Map();
+const recentActivities = [];
+const requiredVoiceElementIds = [
+  "voiceLoadingPanel",
+  "voiceSelect",
+  "reloadVoices",
+  "voiceStatusText",
+  "voiceProgressText",
+  "voiceDiagnosticText",
+  "voiceLoadingIndicator",
+];
+
+console.info(`[Hammer Jarvis] dashboard.js geladen: ${DASHBOARD_BUILD}`);
+if (document?.documentElement) {
+  document.documentElement.dataset.dashboardBuild = DASHBOARD_BUILD;
+}
+
+registerGlobalDashboardErrorHandlers();
+
+function registerGlobalDashboardErrorHandlers() {
+  window.addEventListener("error", (event) => {
+    console.error("[Hammer Jarvis] Dashboard-Laufzeitfehler", event.error || event.message);
+    if (voiceLoadState === VOICE_LOAD_STATES.LOADING || voiceLoadState === VOICE_LOAD_STATES.IDLE) {
+      renderVoiceInitializationError(event.error || new Error(String(event.message || "Unbekannter Fehler")));
+    }
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    console.error("[Hammer Jarvis] Unbehandelte Dashboard-Promise", event.reason);
+    if (voiceLoadState === VOICE_LOAD_STATES.LOADING || voiceLoadState === VOICE_LOAD_STATES.IDLE) {
+      renderVoiceInitializationError(event.reason || new Error("Unbehandelte Promise-Ablehnung"));
+    }
+  });
+}
 
 function bindElements() {
   const ids = [
@@ -14,6 +89,10 @@ function bindElements() {
     "currentTime",
     "statusBadge",
     "errorPanel",
+    "activityPanel",
+    "activeActivities",
+    "recentActivities",
+    "clearActivities",
     "headline",
     "details",
     "emailCount",
@@ -99,6 +178,14 @@ function bindElements() {
     "refreshWatchers",
     "watcherAlerts",
     "speechToggle",
+    "voiceLoadingPanel",
+    "voiceSelect",
+    "voiceSelectStatus",
+    "voiceLoadingIndicator",
+    "voiceStatusText",
+    "voiceProgressText",
+    "voiceDiagnosticText",
+    "reloadVoices",
     "chatLog",
     "recognizedCommand",
     "jarvisAnswer",
@@ -115,24 +202,63 @@ function bindElements() {
   elements.haEntityFilters = document.querySelectorAll(".ha-entity-filter");
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-  return response.json();
+async function fetchJson(url, options = {}) {
+  return requestJson(url, { ...options, method: "GET" });
 }
 
-async function postJson(url, body) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
+async function postJson(url, body, options = {}) {
+  return requestJson(url, { ...options, method: "POST", body });
+}
+
+async function requestJson(url, options = {}) {
+  const timeoutMs = options.timeoutMs ?? fetchTimeoutMs;
+  const activityId = options.activityId || "";
+  let timeoutHandle = null;
+  const controller = new AbortController();
+  if (activityId && !activities.has(activityId)) {
+    startActivity(activityId, options.activityTitle || "Anfrage wird ausgeführt", {
+      category: options.activityCategory || "api",
+      detail: options.activityDetail || "Anfrage wird gesendet",
+      timeoutMs,
+    });
   }
-  return response.json();
+  if (activityId) {
+    updateActivity(activityId, { detail: options.activityDetail || "Anfrage wird gesendet" });
+  }
+  try {
+    timeoutHandle = window.setTimeout(() => controller.abort("timeout"), timeoutMs);
+    const fetchOptions = {
+      method: options.method || "GET",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: options.body ? { "Content-Type": "application/json" } : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    };
+    const response = await fetch(url, fetchOptions);
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.kind = "http";
+      throw error;
+    }
+    return response.json();
+  } catch (error) {
+    if (error.name === "AbortError" || controller.signal.aborted) {
+      const timeoutError = new Error(`Zeitüberschreitung nach ${formatDuration(timeoutMs)}.`);
+      timeoutError.kind = "timeout";
+      if (activityId) {
+        timeoutActivity(activityId, timeoutError.message);
+      }
+      throw timeoutError;
+    }
+    if (activityId) {
+      failActivity(activityId, error.kind === "http" ? error.message : "Netzwerkfehler oder Backend nicht erreichbar.");
+    }
+    throw error;
+  } finally {
+    if (timeoutHandle) {
+      window.clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 function text(value, fallback = "-") {
@@ -167,8 +293,220 @@ function setStatus(overall) {
 
 function setVoiceStatus(message, mode = "") {
   setText("voiceStatus", message);
-  setText("voiceMiniStatus", mode === "active" ? "Hört zu" : "Bereit");
+  setText("voiceMiniStatus", mode === "active" ? "Hört zu" : mode === "speaking" ? "Spricht" : "Bereit");
   elements.voiceStatus.className = `voice-status${mode ? ` ${mode}` : ""}`;
+}
+
+function startActivity(id, title, options = {}) {
+  const activity = {
+    id,
+    title,
+    status: options.status || "running",
+    startTime: Date.now(),
+    endTime: null,
+    detail: options.detail || "",
+    progress: options.progress ?? null,
+    retry: options.retry ?? null,
+    retryTotal: options.retryTotal ?? null,
+    timeoutMs: options.timeoutMs ?? null,
+    category: options.category || "system",
+  };
+  activities.set(id, activity);
+  startActivityTicker();
+  renderActivities();
+  return id;
+}
+
+function updateActivity(id, patch = {}) {
+  const activity = activities.get(id);
+  if (!activity) {
+    return;
+  }
+  Object.assign(activity, patch);
+  if (activity.status === "pending") {
+    activity.status = "running";
+  }
+  renderActivities();
+}
+
+function finishActivity(id, detail = "Abgeschlossen") {
+  endActivity(id, "success", detail);
+}
+
+function failActivity(id, detail = "Fehler") {
+  endActivity(id, "error", detail);
+}
+
+function timeoutActivity(id, detail = "Zeitüberschreitung") {
+  endActivity(id, "timeout", detail);
+}
+
+function cancelActivity(id, detail = "Abgebrochen") {
+  endActivity(id, "cancelled", detail);
+}
+
+function endActivity(id, status, detail) {
+  const activity = activities.get(id);
+  if (!activity) {
+    return;
+  }
+  activity.status = status;
+  activity.detail = detail || activity.detail;
+  activity.endTime = Date.now();
+  activities.delete(id);
+  recentActivities.unshift(activity);
+  trimRecentActivities();
+  renderActivities();
+}
+
+function trimRecentActivities() {
+  const now = Date.now();
+  for (let index = recentActivities.length - 1; index >= 0; index -= 1) {
+    const activity = recentActivities[index];
+    const maxAge = activity.status === "success" ? completedActivityMaxAgeMs : failedActivityMaxAgeMs;
+    if (recentActivities.length > 10 || now - activity.endTime > maxAge) {
+      recentActivities.splice(index, 1);
+    }
+  }
+}
+
+function startActivityTicker() {
+  if (activityTimer) {
+    return;
+  }
+  activityTimer = window.setInterval(() => {
+    trimRecentActivities();
+    renderActivities();
+    if (activities.size === 0 && recentActivities.length === 0) {
+      window.clearInterval(activityTimer);
+      activityTimer = null;
+    }
+  }, activityRefreshMs);
+}
+
+function renderActivities() {
+  try {
+    renderActivityList(elements.activeActivities, Array.from(activities.values()).slice(0, 5), "Keine aktiven Vorgänge.");
+    renderActivityList(elements.recentActivities, recentActivities.slice(0, 5), "Keine abgeschlossenen Vorgänge.");
+  } catch (error) {
+    console.warn("[Hammer Jarvis Activity] Aktivitätsanzeige fehlgeschlagen.", error);
+  }
+}
+
+function renderActivityList(target, items, emptyText) {
+  if (!target) {
+    return;
+  }
+  target.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("li");
+    empty.className = "activity-item activity-cancelled";
+    empty.textContent = emptyText;
+    target.appendChild(empty);
+    return;
+  }
+  for (const activity of items) {
+    target.appendChild(renderActivityItem(activity));
+  }
+}
+
+function renderActivityItem(activity) {
+  const item = document.createElement("li");
+  item.className = `activity-item activity-${activity.status}`;
+  const indicator = document.createElement("span");
+  indicator.className = activity.status === "running" || activity.status === "retrying" || activity.status === "pending"
+    ? "activity-spinner"
+    : "activity-pulse";
+  const body = document.createElement("span");
+  const title = document.createElement("strong");
+  title.textContent = activity.title;
+  const detail = document.createElement("span");
+  detail.className = "activity-detail";
+  detail.textContent = activityDetailText(activity);
+  const elapsed = document.createElement("span");
+  elapsed.className = "activity-elapsed";
+  elapsed.textContent = activityElapsedText(activity);
+  body.append(title, detail, elapsed);
+  item.append(indicator, body);
+  return item;
+}
+
+function activityDetailText(activity) {
+  const parts = [];
+  if (activity.retry !== null && activity.retryTotal !== null) {
+    parts.push(`Versuch ${activity.retry} von ${activity.retryTotal}`);
+  }
+  if (activity.progress) {
+    parts.push(activity.progress);
+  }
+  if (activity.detail) {
+    parts.push(activity.detail);
+  }
+  return parts.join(" · ") || activity.status;
+}
+
+function activityElapsedText(activity) {
+  const end = activity.endTime || Date.now();
+  const duration = Math.max(0, end - activity.startTime);
+  if (activity.endTime) {
+    return `${activityStatusLabel(activity.status)} · ${formatDuration(duration)}`;
+  }
+  return `läuft seit ${formatDuration(duration)}`;
+}
+
+function activityStatusLabel(status) {
+  return {
+    pending: "Wartet",
+    running: "Aktiv",
+    retrying: "Wiederholung",
+    success: "Abgeschlossen",
+    error: "Fehler",
+    timeout: "Zeitüberschreitung",
+    cancelled: "Abgebrochen",
+  }[status] || status;
+}
+
+function formatDuration(milliseconds) {
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 100) / 10);
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toLocaleString("de-DE", { maximumFractionDigits: 1 })} Sekunden`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds % 60);
+  return `${minutes} Minute${minutes === 1 ? "" : "n"} ${seconds} Sekunden`;
+}
+
+function withButtonLoading(button, loadingText, action) {
+  if (!button || button.disabled) {
+    return Promise.resolve();
+  }
+  const originalText = button.dataset.originalText || button.textContent;
+  button.dataset.originalText = originalText;
+  button.disabled = true;
+  button.classList.add("button-loading");
+  button.textContent = loadingText;
+  return Promise.resolve()
+    .then(action)
+    .then((result) => {
+      button.textContent = "Abgeschlossen";
+      window.setTimeout(() => restoreButton(button), 900);
+      return result;
+    })
+    .catch((error) => {
+      button.textContent = "Fehler";
+      window.setTimeout(() => restoreButton(button), 1400);
+      console.warn("[Hammer Jarvis Dashboard] Button-Aktion fehlgeschlagen.", error);
+      return undefined;
+    });
+}
+
+function restoreButton(button) {
+  if (!button) {
+    return;
+  }
+  button.disabled = false;
+  button.classList.remove("button-loading");
+  button.textContent = button.dataset.originalText || button.textContent;
 }
 
 function clearList(target) {
@@ -484,6 +822,15 @@ async function sendChatMessage(textValue) {
   if (!message) {
     return;
   }
+  if (chatActivityId && activities.has(chatActivityId)) {
+    cancelActivity(chatActivityId, "Neue Anfrage gestartet.");
+  }
+  chatActivityId = `chat-${Date.now()}`;
+  startActivity(chatActivityId, "Jarvis verarbeitet die Anfrage", {
+    detail: "Anfrage wird gesendet",
+    category: "chat",
+    timeoutMs: 30000,
+  });
   setText("recognizedCommand", message);
   setText("jarvisAnswer", "Jarvis denkt...");
   setVoiceStatus("Befehl wird gesendet.");
@@ -492,26 +839,45 @@ async function sendChatMessage(textValue) {
   try {
     let response;
     try {
-      response = await postJson("/assistant/chat", { message, confirm: false });
+      response = await postJson("/assistant/chat", { message, confirm: false }, {
+        activityId: chatActivityId,
+        activityTitle: "Jarvis verarbeitet die Anfrage",
+        activityDetail: "Assistant-Endpunkt wird aufgerufen",
+        timeoutMs: 30000,
+      });
     } catch (assistantError) {
       if (!isLegacyHomeAssistantCommand(message)) {
         const errorText = "Der neue Assistant-Endpunkt hat einen Fehler gemeldet. Bitte prüfe die Backend-Konsole.";
+        failActivity(chatActivityId, "Assistant-Endpunkt hat einen Fehler gemeldet.");
         setText("jarvisAnswer", errorText);
         setVoiceStatus(errorText, "error");
         addChatMessage("assistant", errorText);
         return;
       }
-      response = await postJson("/chat", { message });
+      updateActivity(chatActivityId, { detail: "Legacy-Home-Assistant-Endpunkt wird genutzt." });
+      response = await postJson("/chat", { message }, {
+        activityId: chatActivityId,
+        activityTitle: "Jarvis verarbeitet die Anfrage",
+        activityDetail: "Legacy-Endpunkt wird aufgerufen",
+        timeoutMs: 30000,
+      });
     }
     const answer = extractChatAnswer(response);
+    updateActivity(chatActivityId, { detail: "Antwort wird angezeigt." });
     setText("jarvisAnswer", answer);
     setVoiceStatus("Antwort empfangen.");
     addChatMessage("assistant", answer);
     if (speechOutputEnabled) {
       speakAnswer(answer);
     }
+    finishActivity(chatActivityId, "Antwort empfangen.");
   } catch (error) {
     const errorText = "Verbindung zum Hammer-Jarvis-Backend fehlgeschlagen.";
+    if (error.kind === "timeout") {
+      timeoutActivity(chatActivityId, error.message);
+    } else {
+      failActivity(chatActivityId, "Backend-Verbindung fehlgeschlagen.");
+    }
     setText("jarvisAnswer", errorText);
     setVoiceStatus(errorText, "error");
     addChatMessage("assistant", errorText);
@@ -523,13 +889,643 @@ function speakAnswer(answer) {
     setVoiceStatus("Sprachausgabe wird von diesem Browser nicht unterstützt.", "error");
     return;
   }
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(answer);
-  const voices = window.speechSynthesis.getVoices();
-  utterance.lang = "de-DE";
-  utterance.rate = 1;
-  utterance.voice = voices.find((voice) => voice.lang?.toLowerCase().startsWith("de")) || null;
-  window.speechSynthesis.speak(utterance);
+  cancelSpeechOutput(false);
+  if (!speechOutputEnabled) {
+    return;
+  }
+  const preparedText = prepareSpeechText(answer);
+  if (!preparedText) {
+    setVoiceStatus("Keine verwertbare Textausgabe für die Sprachausgabe.", "error");
+    return;
+  }
+  const chunks = splitSpeechText(preparedText);
+  if (chunks.length === 0) {
+    setVoiceStatus("Keine verwertbare Textausgabe für die Sprachausgabe.", "error");
+    return;
+  }
+  const runId = ++speechRunId;
+  if (speechActivityId && activities.has(speechActivityId)) {
+    cancelActivity(speechActivityId, "Neue Sprachausgabe gestartet.");
+  }
+  speechActivityId = `speech-${Date.now()}`;
+  startActivity(speechActivityId, "Jarvis spricht", {
+    detail: "Sprachausgabe wird vorbereitet",
+    progress: `0 von ${chunks.length} Abschnitten`,
+    category: "voice",
+  });
+  speakSpeechChunkQueue(chunks, runId, chunks.length);
+}
+
+function cancelSpeechOutput(showReadyStatus = true) {
+  speechRunId += 1;
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
+  if (speechActivityId && activities.has(speechActivityId)) {
+    cancelActivity(speechActivityId, "Sprachausgabe abgebrochen.");
+  }
+  if (showReadyStatus) {
+    setVoiceStatus("Sprachsteuerung bereit.");
+  }
+}
+
+function speakSpeechChunkQueue(chunks, runId, totalChunks = chunks.length) {
+  if (runId !== speechRunId || !speechOutputEnabled || chunks.length === 0) {
+    return;
+  }
+  const chunk = chunks.shift();
+  const currentChunk = totalChunks - chunks.length;
+  if (speechActivityId && activities.has(speechActivityId)) {
+    updateActivity(speechActivityId, {
+      detail: "Audioausgabe läuft",
+      progress: `${currentChunk} von ${totalChunks} Abschnitten`,
+    });
+  }
+  const utterance = new SpeechSynthesisUtterance(chunk);
+  const voice = getSelectedSpeechVoice();
+  utterance.lang = speechDefaults.lang;
+  utterance.rate = speechDefaults.rate;
+  utterance.pitch = speechDefaults.pitch;
+  utterance.volume = speechDefaults.volume;
+  if (voice) {
+    utterance.voice = voice;
+  } else if (speechVoices.length === 0) {
+    setText("voiceSelectStatus", "Keine Browser-Stimmen geladen. Browserstandard wird verwendet.");
+  }
+  utterance.onstart = () => {
+    if (runId === speechRunId) {
+      setVoiceStatus("Jarvis spricht.", "speaking");
+    }
+  };
+  utterance.onend = () => {
+    if (runId !== speechRunId) {
+      return;
+    }
+    if (chunks.length > 0 && speechOutputEnabled) {
+      window.setTimeout(() => speakSpeechChunkQueue(chunks, runId, totalChunks), 80);
+      return;
+    }
+    setVoiceStatus("Sprachsteuerung bereit.");
+    if (speechActivityId && activities.has(speechActivityId)) {
+      finishActivity(speechActivityId, "Sprachausgabe abgeschlossen.");
+    }
+  };
+  utterance.onerror = (event) => {
+    if (runId !== speechRunId) {
+      return;
+    }
+    const reason = event?.error ? ` (${event.error})` : "";
+    setVoiceStatus(`Sprachausgabe fehlgeschlagen${reason}.`, "error");
+    if (speechActivityId && activities.has(speechActivityId)) {
+      failActivity(speechActivityId, `Sprachausgabe fehlgeschlagen${reason}.`);
+    }
+  };
+  try {
+    window.speechSynthesis.speak(utterance);
+  } catch (error) {
+    if (runId === speechRunId) {
+      setVoiceStatus("Sprachausgabe konnte nicht gestartet werden.", "error");
+      if (speechActivityId && activities.has(speechActivityId)) {
+        failActivity(speechActivityId, "Sprachausgabe konnte nicht gestartet werden.");
+      }
+    }
+  }
+}
+
+function prepareSpeechText(value) {
+  let prepared = text(value, "").trim();
+  if (!prepared) {
+    return "";
+  }
+  prepared = prepared.replace(/```[\s\S]*?```/g, " Ein technischer Codeabschnitt wurde ausgelassen. ");
+  prepared = prepared.replace(/https?:\/\/[^\s)]+/gi, " Link ausgelassen. ");
+  prepared = prepared.replace(/`([^`]+)`/g, "$1");
+  prepared = prepared.replace(/^\s{0,3}#{1,6}\s*/gm, "");
+  prepared = prepared.replace(/^\s{0,3}>\s?/gm, "");
+  prepared = prepared.replace(/^\s*[-*+]\s+/gm, ". ");
+  prepared = prepared.replace(/^\s*\d+[\.)]\s+/gm, ". ");
+  prepared = prepared.replace(/[*_~|]/g, " ");
+  prepared = prepared.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+  prepared = prepared.replace(/\s+/g, " ");
+  prepared = prepared.replace(/\s+([.,;:!?])/g, "$1");
+  return prepared.trim();
+}
+
+function splitSpeechText(value) {
+  const prepared = text(value, "").trim();
+  if (!prepared) {
+    return [];
+  }
+  const sentences = prepared.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [prepared];
+  const chunks = [];
+  let current = "";
+  for (const sentence of sentences.map((item) => item.trim()).filter(Boolean)) {
+    const next = current ? `${current} ${sentence}` : sentence;
+    if (next.length <= speechDefaults.maxChunkLength) {
+      current = next;
+      continue;
+    }
+    if (current) {
+      chunks.push(current);
+    }
+    if (sentence.length > speechDefaults.maxChunkLength) {
+      chunks.push(...splitLongSpeechSegment(sentence));
+      current = "";
+    } else {
+      current = sentence;
+    }
+  }
+  if (current) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
+function splitLongSpeechSegment(segment) {
+  const words = segment.split(/\s+/).filter(Boolean);
+  const chunks = [];
+  let current = "";
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (next.length > speechDefaults.targetChunkLength && current) {
+      chunks.push(current);
+      current = word;
+    } else {
+      current = next;
+    }
+  }
+  if (current) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
+function validateVoiceDomElements() {
+  const missing = requiredVoiceElementIds.filter((id) => !elements[id]);
+  if (missing.length > 0) {
+    console.error("[Hammer Jarvis Voice] Fehlende Voice-DOM-Elemente", missing);
+    renderVoiceInitializationError(new Error(`Fehlende Voice-DOM-Elemente: ${missing.join(", ")}`));
+    return false;
+  }
+  return true;
+}
+
+function renderVoiceInitializationError(error) {
+  clearVoiceLoadTimers();
+  voiceLoadInProgress = false;
+  setVoiceLoadState(VOICE_LOAD_STATES.ERROR);
+  setVoiceSelectUnavailable(
+    "Keine Browser-Stimmen verfügbar",
+    "Stimmeninitialisierung fehlgeschlagen. Dashboard läuft weiter.",
+  );
+  setText("voiceProgressText", "Voice-Bootstrap wurde mit Fehler beendet.");
+  updateVoiceDiagnostic(speechVoices.length);
+  failActivity("voice-load", "Stimmeninitialisierung fehlgeschlagen.");
+  console.error("[Hammer Jarvis Voice] Initialisierung fehlgeschlagen", error);
+}
+
+function initializeVoiceSubsystemSafely() {
+  try {
+    if (!validateVoiceDomElements()) {
+      return;
+    }
+    startVoiceLoadingCycle();
+    if (voiceLoadState === VOICE_LOAD_STATES.IDLE) {
+      console.error("[Hammer Jarvis Voice] Bootstrap beendet, aber Zustand blieb idle.");
+      renderVoiceInitializationError(new Error("Voice-Zustand blieb nach Bootstrap idle."));
+    }
+  } catch (error) {
+    renderVoiceInitializationError(error);
+  }
+}
+
+function startVoiceLoadingCycle() {
+  const generation = voiceLoadGeneration + 1;
+  try {
+    if (!validateVoiceDomElements()) {
+      return;
+    }
+    cancelVoiceLoadingCycle(VOICE_LOAD_STATES.CANCELLED, false);
+    voiceLoadGeneration = generation;
+    voiceLoadAttempt = 0;
+    voiceLoadStartTime = Date.now();
+    voiceLoadInProgress = true;
+    voiceLoadDiagnosticsLogged = false;
+    setVoiceLoadState(VOICE_LOAD_STATES.LOADING);
+    startActivity("voice-load", "Browser-Stimmen werden geladen", {
+      detail: `Versuch 0 von ${VOICE_RETRY_DELAYS_MS.length}`,
+      retry: 0,
+      retryTotal: VOICE_RETRY_DELAYS_MS.length,
+      category: "voice",
+      timeoutMs: VOICE_LOAD_WATCHDOG_MS,
+    });
+    registerSpeechVoicesChangedListener();
+    if (!("speechSynthesis" in window)) {
+      finishVoiceLoadingCycle(
+        VOICE_LOAD_STATES.UNSUPPORTED,
+        "Sprachausgabe wird von diesem Browser nicht unterstützt.",
+      );
+      return;
+    }
+    setVoiceSelectLoading();
+    voiceLoadElapsedTimer = window.setInterval(() => updateVoiceLoadingProgress(generation), VOICE_LOAD_ELAPSED_UPDATE_MS);
+    for (const [index, delay] of VOICE_RETRY_DELAYS_MS.entries()) {
+      const timer = window.setTimeout(() => runVoiceLoadAttempt(generation, index + 1), delay);
+      voiceLoadTimers.push(timer);
+    }
+    const watchdog = window.setTimeout(() => {
+      if (generation !== voiceLoadGeneration || isFinalVoiceLoadState()) {
+        return;
+      }
+      finishVoiceLoadingCycle(VOICE_LOAD_STATES.EMPTY, "0 Stimmen geladen · Suche nach 5 Sekunden beendet");
+    }, VOICE_LOAD_WATCHDOG_MS);
+    voiceLoadTimers.push(watchdog);
+    updateVoiceLoadingProgress(generation);
+  } catch (error) {
+    handleVoiceLoadingError(error, generation);
+  }
+}
+
+function cancelVoiceLoadingCycle(nextState = VOICE_LOAD_STATES.CANCELLED, updateUi = true) {
+  clearVoiceLoadTimers();
+  voiceLoadInProgress = false;
+  if (updateUi) {
+    setVoiceLoadState(nextState);
+  }
+}
+
+function clearVoiceLoadTimers() {
+  for (const timer of voiceLoadTimers) {
+    window.clearTimeout(timer);
+  }
+  voiceLoadTimers = [];
+  if (voiceLoadElapsedTimer) {
+    window.clearInterval(voiceLoadElapsedTimer);
+    voiceLoadElapsedTimer = null;
+  }
+}
+
+function runVoiceLoadAttempt(generation, attempt) {
+  if (generation !== voiceLoadGeneration || isFinalVoiceLoadState()) {
+    return;
+  }
+  try {
+    voiceLoadAttempt = attempt;
+    updateVoiceLoadingProgress(generation);
+    const voices = readBrowserVoices();
+    if (voices.length > 0) {
+      applyAvailableVoices(voices);
+      return;
+    }
+    if (attempt >= VOICE_RETRY_DELAYS_MS.length) {
+      finishVoiceLoadingCycle(VOICE_LOAD_STATES.EMPTY, "0 Stimmen geladen · Suche nach 5 Sekunden beendet");
+    }
+  } catch (error) {
+    handleVoiceLoadingError(error, generation);
+  }
+}
+
+function readBrowserVoices() {
+  if (!("speechSynthesis" in window)) {
+    return [];
+  }
+  return getValidSpeechVoices(window.speechSynthesis.getVoices());
+}
+
+function applyAvailableVoices(voices) {
+  if (!voices || voiceLoadState === VOICE_LOAD_STATES.ERROR || voiceLoadState === VOICE_LOAD_STATES.UNSUPPORTED) {
+    return;
+  }
+  const validVoices = getValidSpeechVoices(voices);
+  if (validVoices.length === 0) {
+    updateVoiceDiagnostic(0);
+    return;
+  }
+  speechVoices = validVoices;
+  clearVoiceLoadTimers();
+  voiceLoadInProgress = false;
+  setVoiceLoadState(VOICE_LOAD_STATES.SUCCESS);
+  populateVoiceSelectFromState(validVoices);
+  const germanCount = germanSpeechVoices(validVoices).length;
+  const selectedVoice = getSelectedSpeechVoice();
+  const statusText = germanCount > 0
+    ? `${validVoices.length} Stimmen geladen · ${germanCount} deutsch · Auswahl: ${selectedVoice?.name || "Browserstandard"}`
+    : `${validVoices.length} Stimmen geladen · keine deutsche Stimme gefunden`;
+  setVoiceStatusText(statusText);
+  setText("voiceSelectStatus", statusText);
+  setText("voiceProgressText", `Versuch ${voiceLoadAttempt || 1} von ${VOICE_RETRY_DELAYS_MS.length} · ${formatDuration(Date.now() - voiceLoadStartTime)}`);
+  updateVoiceDiagnostic(validVoices.length);
+  logSpeechVoiceDiagnostics();
+  finishActivity("voice-load", statusText);
+}
+
+function finishVoiceLoadingCycle(state, statusText) {
+  if (isFinalVoiceLoadState()) {
+    return;
+  }
+  clearVoiceLoadTimers();
+  voiceLoadInProgress = false;
+  setVoiceLoadState(state);
+  if (state === VOICE_LOAD_STATES.EMPTY) {
+    speechVoices = [];
+    setVoiceSelectUnavailable(
+      "Keine Browser-Stimmen verfügbar",
+      "Keine Stimmen nach 5 Sekunden. Windows-Sprachpakete oder Browser prüfen.",
+    );
+    setText("voiceProgressText", `Versuch ${VOICE_RETRY_DELAYS_MS.length} von ${VOICE_RETRY_DELAYS_MS.length} · ${formatDuration(Date.now() - voiceLoadStartTime)}`);
+    updateVoiceDiagnostic(0);
+    logSpeechVoiceDiagnostics();
+    timeoutActivity("voice-load", statusText);
+    return;
+  }
+  if (state === VOICE_LOAD_STATES.UNSUPPORTED) {
+    setVoiceSelectUnavailable("Sprachausgabe nicht unterstützt", statusText);
+    setText("voiceProgressText", "Keine Web Speech API verfügbar.");
+    updateVoiceDiagnostic(0);
+    failActivity("voice-load", statusText);
+    return;
+  }
+  setVoiceStatusText(statusText);
+  updateVoiceDiagnostic(speechVoices.length);
+}
+
+function handleVoiceLoadingError(error, generation = voiceLoadGeneration) {
+  if (generation !== voiceLoadGeneration) {
+    return;
+  }
+  clearVoiceLoadTimers();
+  voiceLoadInProgress = false;
+  setVoiceLoadState(VOICE_LOAD_STATES.ERROR);
+  setVoiceSelectUnavailable(
+    "Keine Browser-Stimmen verfügbar",
+    "Stimmeninitialisierung fehlgeschlagen. Dashboard läuft weiter.",
+  );
+  updateVoiceDiagnostic(speechVoices.length);
+  failActivity("voice-load", "Stimmeninitialisierung fehlgeschlagen.");
+  console.error("[Hammer Jarvis Voice] Stimmenladezyklus fehlgeschlagen.", error);
+}
+
+function registerSpeechVoicesChangedListener() {
+  if (speechVoicesListenerRegistered || !("speechSynthesis" in window)) {
+    return;
+  }
+  const onVoicesChanged = () => {
+    const generation = voiceLoadGeneration;
+    try {
+      const voices = readBrowserVoices();
+      if (generation !== voiceLoadGeneration) {
+        return;
+      }
+      if (voices.length > 0) {
+        applyAvailableVoices(voices);
+      } else {
+        updateVoiceDiagnostic(0);
+      }
+    } catch (error) {
+      handleVoiceLoadingError(error);
+    }
+  };
+  if (typeof window.speechSynthesis.addEventListener === "function") {
+    window.speechSynthesis.addEventListener("voiceschanged", onVoicesChanged);
+  } else {
+    window.speechSynthesis.onvoiceschanged = onVoicesChanged;
+  }
+  speechVoicesListenerRegistered = true;
+}
+
+function getValidSpeechVoices(voices) {
+  try {
+    return Array.from(voices || []).filter((voice) => String(voice?.name || voice?.voiceURI || "").trim());
+  } catch (error) {
+    return [];
+  }
+}
+
+function isGermanVoice(voice) {
+  return String(voice?.lang || "").toLowerCase().startsWith("de");
+}
+
+function germanSpeechVoices(voices) {
+  return getValidSpeechVoices(voices).filter(isGermanVoice);
+}
+
+function choosePreferredGermanVoice(voices) {
+  const germanVoices = germanSpeechVoices(voices);
+  const byName = (needle) => germanVoices.find((voice) => String(voice?.name || "").toLowerCase().includes(needle));
+  return (
+    byName("natural")
+    || byName("online")
+    || byName("katja")
+    || byName("conrad")
+    || germanVoices.find((voice) => String(voice?.lang || "").toLowerCase() === "de-de")
+    || germanVoices[0]
+    || null
+  );
+}
+
+function chooseFallbackSpeechVoice(voices) {
+  const validVoices = getValidSpeechVoices(voices);
+  return choosePreferredGermanVoice(validVoices)
+    || validVoices.find((voice) => Boolean(voice?.default))
+    || validVoices[0]
+    || null;
+}
+
+function populateVoiceSelectFromState(voices) {
+  const select = elements.voiceSelect;
+  if (!select) {
+    console.warn("[Hammer Jarvis Voice] voiceSelect nicht gefunden.");
+    return;
+  }
+  const validVoices = getValidSpeechVoices(voices);
+  const germanVoices = germanSpeechVoices(validVoices);
+  if (validVoices.length === 0) {
+    setVoiceSelectUnavailable(
+      "Keine Browser-Stimmen verfügbar",
+      "Keine Stimmen nach 5 Sekunden. Windows-Sprachpakete oder Browser prüfen.",
+    );
+    return;
+  }
+
+  const visibleVoices = germanVoices.length > 0 ? germanVoices : validVoices;
+  const storedVoiceId = readStoredVoiceId();
+  const previousValue = select.value || storedVoiceId;
+  const automaticVoice = germanVoices.length > 0 ? choosePreferredGermanVoice(validVoices) : chooseFallbackSpeechVoice(validVoices);
+  select.innerHTML = "";
+  select.disabled = false;
+  for (const voice of visibleVoices) {
+    const option = document.createElement("option");
+    option.value = voiceId(voice);
+    option.textContent = voiceLabel(voice);
+    select.appendChild(option);
+  }
+  const automaticVoiceId = automaticVoice ? voiceId(automaticVoice) : "";
+  const storedStillAvailable = visibleVoices.some((voice) => voiceId(voice) === storedVoiceId);
+  const previousStillAvailable = visibleVoices.some((voice) => voiceId(voice) === previousValue);
+  select.value = storedStillAvailable ? storedVoiceId : previousStillAvailable ? previousValue : automaticVoiceId;
+  if (select.value) {
+    storeVoiceId(select.value);
+  }
+}
+
+function setVoiceSelectLoading() {
+  const select = elements.voiceSelect;
+  if (!select) {
+    return;
+  }
+  select.innerHTML = "";
+  const option = document.createElement("option");
+  option.value = "";
+  option.textContent = "Stimmen werden geladen...";
+  select.appendChild(option);
+  select.disabled = true;
+  setVoiceStatusText("Browser-Stimmen werden geladen");
+  setText("voiceSelectStatus", "Browser-Stimmen werden geladen.");
+}
+
+function setVoiceSelectUnavailable(optionText, statusText) {
+  const select = elements.voiceSelect;
+  if (!select) {
+    return;
+  }
+  select.innerHTML = "";
+  const option = document.createElement("option");
+  option.value = "";
+  option.textContent = optionText;
+  select.appendChild(option);
+  select.disabled = true;
+  setVoiceStatusText(statusText);
+  setText("voiceSelectStatus", statusText);
+}
+
+function setVoiceLoadState(state) {
+  voiceLoadState = state;
+  const panel = elements.voiceLoadingPanel;
+  if (panel) {
+    panel.classList.remove(
+      "voice-loading",
+      "voice-success",
+      "voice-empty",
+      "voice-unsupported",
+      "voice-error",
+      "voice-cancelled",
+    );
+    panel.classList.add(`voice-${state}`);
+    panel.setAttribute("aria-busy", state === VOICE_LOAD_STATES.LOADING ? "true" : "false");
+  }
+  if (elements.reloadVoices) {
+    if (!elements.reloadVoices.dataset.originalText) {
+      elements.reloadVoices.dataset.originalText = elements.reloadVoices.textContent;
+    }
+    elements.reloadVoices.disabled = state === VOICE_LOAD_STATES.LOADING;
+    elements.reloadVoices.classList.toggle("button-loading", state === VOICE_LOAD_STATES.LOADING);
+    elements.reloadVoices.textContent = state === VOICE_LOAD_STATES.LOADING
+      ? "Stimmen werden gesucht..."
+      : elements.reloadVoices.dataset.originalText;
+  }
+}
+
+function setVoiceStatusText(value) {
+  setText("voiceStatusText", value);
+}
+
+function updateVoiceLoadingProgress(generation) {
+  if (generation !== voiceLoadGeneration || voiceLoadState !== VOICE_LOAD_STATES.LOADING) {
+    return;
+  }
+  const elapsed = voiceLoadStartTime ? formatDuration(Date.now() - voiceLoadStartTime) : "0 Sekunden";
+  const attempt = Math.max(voiceLoadAttempt, 1);
+  setVoiceStatusText("Browser-Stimmen werden geladen");
+  setText("voiceProgressText", `Versuch ${attempt} von ${VOICE_RETRY_DELAYS_MS.length} · läuft seit ${elapsed}`);
+  setText("voiceSelectStatus", `Browser-Stimmen werden geladen. Versuch ${attempt} von ${VOICE_RETRY_DELAYS_MS.length}.`);
+  updateVoiceDiagnostic(speechVoices.length);
+  updateActivity("voice-load", {
+    status: "retrying",
+    retry: attempt,
+    retryTotal: VOICE_RETRY_DELAYS_MS.length,
+    detail: `läuft seit ${elapsed}`,
+  });
+}
+
+function updateVoiceDiagnostic(totalVoices) {
+  const apiStatus = "speechSynthesis" in window ? "verfügbar" : "nicht verfügbar";
+  setText("voiceDiagnosticText", `Build: ${DASHBOARD_BUILD} · TTS API: ${apiStatus} · getVoices(): ${totalVoices} · Zustand: ${voiceLoadState}`);
+}
+
+function isFinalVoiceLoadState() {
+  return [
+    VOICE_LOAD_STATES.SUCCESS,
+    VOICE_LOAD_STATES.EMPTY,
+    VOICE_LOAD_STATES.UNSUPPORTED,
+    VOICE_LOAD_STATES.ERROR,
+    VOICE_LOAD_STATES.CANCELLED,
+  ].includes(voiceLoadState) && !voiceLoadInProgress;
+}
+
+function getSelectedSpeechVoice() {
+  const selectedId = elements.voiceSelect?.value || readStoredVoiceId();
+  const selectedVoice = speechVoices.find((voice) => voiceId(voice) === selectedId);
+  return selectedVoice || chooseFallbackSpeechVoice(speechVoices);
+}
+
+function voiceId(voice) {
+  return [voice?.voiceURI || "", voice?.name || "", voice?.lang || ""].join("||");
+}
+
+function voiceLabel(voice) {
+  const name = String(voice?.name || "Unbenannte Stimme").trim();
+  const lang = String(voice?.lang || "Sprache unbekannt").trim();
+  return `${name} — ${lang}`;
+}
+
+function logSpeechVoiceDiagnostics() {
+  if (voiceLoadDiagnosticsLogged) {
+    return;
+  }
+  const allCount = speechVoices.length;
+  const germanCount = germanSpeechVoices(speechVoices).length;
+  const selectedVoice = getSelectedSpeechVoice();
+  console.info("[Hammer Jarvis Voice]", {
+    state: voiceLoadState,
+    totalVoices: allCount,
+    germanVoices: germanCount,
+    selectedVoice: selectedVoice?.name || "Browserstandard",
+    attempts: voiceLoadAttempt,
+    durationMs: voiceLoadStartTime ? Date.now() - voiceLoadStartTime : 0,
+  });
+  voiceLoadDiagnosticsLogged = true;
+}
+
+function readStoredVoiceId() {
+  try {
+    return localStorage.getItem(speechVoiceStorageKey) || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function storeVoiceId(value) {
+  try {
+    localStorage.setItem(speechVoiceStorageKey, value);
+  } catch (error) {
+    setText("voiceSelectStatus", "Stimme ausgewählt, aber lokale Speicherung ist nicht verfügbar.");
+  }
+}
+
+function removeStoredVoiceId() {
+  try {
+    localStorage.removeItem(speechVoiceStorageKey);
+  } catch (error) {
+    // localStorage can be unavailable in strict browser privacy modes.
+  }
+}
+
+function reloadSpeechVoices() {
+  try {
+    startVoiceLoadingCycle();
+  } catch (error) {
+    renderVoiceInitializationError(error);
+  }
 }
 
 function startVoiceRecognition() {
@@ -542,6 +1538,12 @@ function startVoiceRecognition() {
     return;
   }
 
+  let recognitionHadResult = false;
+  recognitionActivityId = "speech-recognition";
+  startActivity(recognitionActivityId, "Spracherkennung läuft", {
+    detail: "Mikrofon wird gestartet",
+    category: "voice",
+  });
   const recognition = new SpeechRecognition();
   recognition.lang = "de-DE";
   recognition.interimResults = false;
@@ -551,27 +1553,39 @@ function startVoiceRecognition() {
     elements.voiceCard.classList.add("listening");
     elements.voiceButton.classList.add("listening");
     setVoiceStatus("Ich höre zu...", "active");
+    updateActivity(recognitionActivityId, { detail: "Mikrofon aktiv. Bitte sprechen." });
   };
   recognition.onresult = (event) => {
+    recognitionHadResult = true;
     const transcript = event.results?.[0]?.[0]?.transcript || "";
     elements.commandInput.value = transcript;
     setText("recognizedCommand", transcript || "-");
+    finishActivity(recognitionActivityId, transcript ? `Erkannt: ${transcript}` : "Kein Text erkannt.");
     if (transcript) {
       sendChatMessage(transcript);
     }
   };
   recognition.onerror = (event) => {
     setVoiceStatus(`Spracherkennung fehlgeschlagen: ${event.error}`, "error");
+    failActivity(recognitionActivityId, `Spracherkennung fehlgeschlagen: ${event.error}`);
   };
   recognition.onend = () => {
     isListening = false;
     elements.voiceCard.classList.remove("listening");
     elements.voiceButton.classList.remove("listening");
+    if (!recognitionHadResult && recognitionActivityId && activities.has(recognitionActivityId)) {
+      cancelActivity(recognitionActivityId, "Spracherkennung beendet.");
+    }
     if (!elements.voiceStatus.classList.contains("error")) {
       setVoiceStatus("Sprachsteuerung bereit.");
     }
   };
-  recognition.start();
+  try {
+    recognition.start();
+  } catch (error) {
+    failActivity(recognitionActivityId, "Spracherkennung konnte nicht gestartet werden.");
+    setVoiceStatus("Spracherkennung konnte nicht gestartet werden.", "error");
+  }
 }
 
 function runQuickCommand(command) {
@@ -932,13 +1946,25 @@ async function searchFiles() {
   }
   const contentMode = elements.fileSearchMode.value === "content";
   const endpoint = contentMode ? "/assistant/files/content-search" : "/assistant/files/search";
+  const activityId = contentMode ? "file-content-search" : "file-search";
   setText("fileStatus", contentMode ? "Dateiinhalte werden durchsucht..." : "Dateien werden gesucht...");
   try {
-    const response = await fetchJson(`${endpoint}?q=${encodeURIComponent(query)}`);
+    const response = await fetchJson(`${endpoint}?q=${encodeURIComponent(query)}`, {
+      activityId,
+      activityTitle: contentMode ? "Dateiinhalte werden durchsucht" : "Dateien werden gesucht",
+      activityDetail: `Suchbegriff: ${query}`,
+      timeoutMs: contentMode ? 45000 : 20000,
+    });
     setText("fileStatus", response.message || "Suche abgeschlossen.");
     renderList(elements.fileSearchResults, response.files || [], renderFile, "Keine passenden Dateien.");
+    finishActivity(activityId, response.message || "Dateisuche abgeschlossen.");
   } catch (error) {
     setText("fileStatus", "Dateisuche fehlgeschlagen.");
+    if (error.kind === "timeout") {
+      timeoutActivity(activityId, error.message);
+    } else {
+      failActivity(activityId, "Dateisuche fehlgeschlagen.");
+    }
   }
 }
 
@@ -951,12 +1977,23 @@ async function runWebResearch() {
   setText("webResearchAnswer", "-");
   renderList(elements.webResearchSources, [], renderWebSource);
   try {
-    const response = await postJson("/assistant/web/research", { query });
+    const response = await postJson("/assistant/web/research", { query }, {
+      activityId: "web-research",
+      activityTitle: "Internetrecherche läuft",
+      activityDetail: `Recherche: ${query}`,
+      timeoutMs: 45000,
+    });
     setText("webResearchStatus", response.message || "Recherche abgeschlossen.");
     setText("webResearchAnswer", response.answer || response.summary || response.message || "Keine Zusammenfassung verfügbar.");
     renderList(elements.webResearchSources, response.sources || [], renderWebSource, "Keine Quellen.");
+    finishActivity("web-research", response.message || "Recherche abgeschlossen.");
   } catch (error) {
     setText("webResearchStatus", "Internetrecherche fehlgeschlagen.");
+    if (error.kind === "timeout") {
+      timeoutActivity("web-research", error.message);
+    } else {
+      failActivity("web-research", "Internetrecherche fehlgeschlagen.");
+    }
   }
 }
 
@@ -965,31 +2002,61 @@ async function refreshDashboard() {
     return;
   }
   dashboardRefreshInFlight = true;
+  const activityId = "dashboard-refresh";
   try {
     elements.errorPanel.hidden = true;
-    const tasks = [
-      refreshSystemStatus(),
-      refreshEcoFlow(),
-      refreshHomeAssistant(),
-      refreshAlerts(),
-      refreshRecentFiles(),
-      refreshEmail(),
-      refreshTimeTree(),
-      refreshSmartHomeActions(),
-      refreshSmartHomeAutoPolicy(),
-      refreshHaControlPolicy(),
-      refreshMemory(),
-      refreshKnowledge(),
-      refreshActions(),
-      refreshPerformance(),
+    const taskDefinitions = [
+      ["Systemstatus", refreshSystemStatus],
+      ["EcoFlow", refreshEcoFlow],
+      ["Home Assistant", refreshHomeAssistant],
+      ["Alerts", refreshAlerts],
+      ["Dateien", refreshRecentFiles],
+      ["Gmail", refreshEmail],
+      ["TimeTree", refreshTimeTree],
+      ["Smart Home", refreshSmartHomeActions],
+      ["Auto-Policy", refreshSmartHomeAutoPolicy],
+      ["HA-Control", refreshHaControlPolicy],
+      ["Memory", refreshMemory],
+      ["Knowledge", refreshKnowledge],
+      ["Aktionen", refreshActions],
+      ["Performance", refreshPerformance],
     ];
     const now = Date.now();
     if (now - lastEntityCatalogRefresh >= entityCatalogRefreshMs) {
       lastEntityCatalogRefresh = now;
-      tasks.push(refreshHaEntityCatalog());
+      taskDefinitions.push(["HA-Entity-Katalog", refreshHaEntityCatalog]);
     }
-    await Promise.all(tasks);
+    let completed = 0;
+    let failed = 0;
+    const total = taskDefinitions.length;
+    startActivity(activityId, "Dashboard wird aktualisiert", {
+      detail: "Dashboard-Daten werden geladen",
+      progress: `0 von ${total} Bereichen`,
+      category: "dashboard",
+      timeoutMs: 20000,
+    });
+    await Promise.all(taskDefinitions.map(async ([name, task]) => {
+      try {
+        await task();
+      } catch (error) {
+        failed += 1;
+        console.warn(`[Hammer Jarvis Dashboard] ${name} konnte nicht aktualisiert werden.`, error);
+      } finally {
+        completed += 1;
+        updateActivity(activityId, {
+          detail: failed > 0 ? `${failed} Bereich(e) fehlgeschlagen.` : "Dashboard-Daten werden geladen",
+          progress: `${completed} von ${total} Bereichen`,
+        });
+      }
+    }));
+    if (failed > 0) {
+      failActivity(activityId, `Dashboard bereit, ${failed} Bereich(e) konnten nicht geladen werden.`);
+      elements.errorPanel.hidden = false;
+    } else {
+      finishActivity(activityId, "Dashboard bereit.");
+    }
   } catch (error) {
+    failActivity(activityId, "Dashboard konnte nicht aktualisiert werden.");
     elements.errorPanel.hidden = false;
     setStatus("critical");
   } finally {
@@ -1002,130 +2069,201 @@ function updateClock() {
 }
 
 function wireEvents() {
-  elements.sendCommand.addEventListener("click", () => sendChatMessage(elements.commandInput.value));
+  try {
+    wireDashboardEvents();
+  } catch (error) {
+    console.error("[Hammer Jarvis] Event-Handler konnten nicht vollständig registriert werden.", error);
+  }
+}
+
+function wireDashboardEvents() {
+  elements.sendCommand.addEventListener("click", () => withButtonLoading(
+    elements.sendCommand,
+    "Senden...",
+    () => sendChatMessage(elements.commandInput.value),
+  ));
   elements.commandInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       sendChatMessage(elements.commandInput.value);
     }
   });
-  elements.voiceButton.addEventListener("click", startVoiceRecognition);
-  elements.chatMicButton.addEventListener("click", startVoiceRecognition);
+  elements.voiceButton.addEventListener("click", () => withButtonLoading(elements.voiceButton, "Hört zu...", startVoiceRecognition));
+  elements.chatMicButton.addEventListener("click", () => withButtonLoading(elements.chatMicButton, "Hört zu...", startVoiceRecognition));
+  elements.clearActivities.addEventListener("click", () => {
+    recentActivities.length = 0;
+    renderActivities();
+  });
   elements.speechToggle.addEventListener("click", () => {
     speechOutputEnabled = !speechOutputEnabled;
-    if (!speechOutputEnabled && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
+    if (!speechOutputEnabled) {
+      cancelSpeechOutput(false);
     }
     elements.speechToggle.textContent = speechOutputEnabled ? "Sprachausgabe: Ein" : "Sprachausgabe: Aus";
     setVoiceStatus(speechOutputEnabled ? "Sprachausgabe ist eingeschaltet." : "Sprachausgabe ist ausgeschaltet.");
   });
+  if (elements.voiceSelect) {
+    elements.voiceSelect.addEventListener("change", () => {
+      if (elements.voiceSelect.value) {
+        storeVoiceId(elements.voiceSelect.value);
+      } else {
+        removeStoredVoiceId();
+      }
+      const selectedVoice = getSelectedSpeechVoice();
+      setText("voiceSelectStatus", selectedVoice ? `Aktive Stimme: ${selectedVoice.name || "Browserstandard"}` : "Browserstandard wird verwendet.");
+    });
+  }
+  if (elements.reloadVoices) {
+    elements.reloadVoices.addEventListener("click", reloadSpeechVoices);
+  }
   for (const button of elements.quickCommands) {
     button.addEventListener("click", () => runQuickCommand(button.dataset.command || button.textContent));
   }
   for (const button of elements.fileButtons) {
     button.addEventListener("click", () => runQuickCommand(button.dataset.command || "erstelle eine Excel fuer Ausgaben"));
   }
-  elements.fileSearchButton.addEventListener("click", searchFiles);
-  elements.fileContentSearchButton.addEventListener("click", () => {
+  elements.fileSearchButton.addEventListener("click", () => withButtonLoading(elements.fileSearchButton, "Suche...", searchFiles));
+  elements.fileContentSearchButton.addEventListener("click", () => withButtonLoading(elements.fileContentSearchButton, "Suche Inhalte...", () => {
     elements.fileSearchMode.value = "content";
-    searchFiles();
-  });
+    return searchFiles();
+  }));
   elements.fileSearchInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      searchFiles();
+      withButtonLoading(elements.fileSearchButton, "Suche...", searchFiles);
     }
   });
-  elements.openLatestFile.addEventListener("click", async () => {
+  elements.openLatestFile.addEventListener("click", () => withButtonLoading(elements.openLatestFile, "Öffne...", async () => {
     try {
-      const response = await postJson("/assistant/files/open-latest", {});
+      const response = await postJson("/assistant/files/open-latest", {}, {
+        activityId: "open-latest-file",
+        activityTitle: "Letzte Datei wird geöffnet",
+        activityDetail: "Dateiaktion wird gesendet",
+      });
       setText("fileStatus", response.message || "Letzte Datei wurde geöffnet.");
+      finishActivity("open-latest-file", response.message || "Letzte Datei wurde geöffnet.");
     } catch (error) {
       setText("fileStatus", "Letzte Datei konnte nicht geöffnet werden.");
+      failActivity("open-latest-file", "Letzte Datei konnte nicht geöffnet werden.");
     }
-  });
-  elements.webResearchButton.addEventListener("click", runWebResearch);
+  }));
+  elements.webResearchButton.addEventListener("click", () => withButtonLoading(elements.webResearchButton, "Recherchiere...", runWebResearch));
   elements.webResearchInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      runWebResearch();
+      withButtonLoading(elements.webResearchButton, "Recherchiere...", runWebResearch);
     }
   });
-  elements.refreshWatchers.addEventListener("click", refreshAlerts);
-  elements.refreshPerformance.addEventListener("click", refreshPerformance);
-  elements.runOllamaBenchmark.addEventListener("click", runOllamaBenchmark);
-  elements.syncHaEntities.addEventListener("click", syncHaEntities);
-  elements.haEntitySearchButton.addEventListener("click", searchHaEntities);
+  elements.refreshWatchers.addEventListener("click", () => withButtonLoading(elements.refreshWatchers, "Lade...", refreshAlerts));
+  elements.refreshPerformance.addEventListener("click", () => withButtonLoading(elements.refreshPerformance, "Messe...", refreshPerformance));
+  elements.runOllamaBenchmark.addEventListener("click", () => withButtonLoading(elements.runOllamaBenchmark, "Benchmark...", runOllamaBenchmark));
+  elements.syncHaEntities.addEventListener("click", () => withButtonLoading(elements.syncHaEntities, "Sync...", syncHaEntities));
+  elements.haEntitySearchButton.addEventListener("click", () => withButtonLoading(elements.haEntitySearchButton, "Suche...", searchHaEntities));
   elements.haEntitySearchInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      searchHaEntities();
+      withButtonLoading(elements.haEntitySearchButton, "Suche...", searchHaEntities);
     }
   });
   for (const button of elements.haEntityFilters) {
     button.addEventListener("click", () => filterHaEntities(button.dataset.filter));
   }
-  elements.refreshSmartHomeActions.addEventListener("click", refreshSmartHomeActions);
-  elements.discoverSmartHomeCandidates.addEventListener("click", discoverSmartHomeCandidates);
-  elements.refreshSmartHomeAutoPolicy.addEventListener("click", refreshSmartHomeAutoPolicy);
-  elements.refreshHaControlPolicy.addEventListener("click", refreshHaControlPolicy);
-  elements.haControlPrepareButton.addEventListener("click", prepareHaControlCommand);
+  elements.refreshSmartHomeActions.addEventListener("click", () => withButtonLoading(elements.refreshSmartHomeActions, "Lade...", refreshSmartHomeActions));
+  elements.discoverSmartHomeCandidates.addEventListener("click", () => withButtonLoading(elements.discoverSmartHomeCandidates, "Suche...", discoverSmartHomeCandidates));
+  elements.refreshSmartHomeAutoPolicy.addEventListener("click", () => withButtonLoading(elements.refreshSmartHomeAutoPolicy, "Lade...", refreshSmartHomeAutoPolicy));
+  elements.refreshHaControlPolicy.addEventListener("click", () => withButtonLoading(elements.refreshHaControlPolicy, "Lade...", refreshHaControlPolicy));
+  elements.haControlPrepareButton.addEventListener("click", () => withButtonLoading(elements.haControlPrepareButton, "Prüfe...", prepareHaControlCommand));
   elements.haControlCommandInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      prepareHaControlCommand();
+      withButtonLoading(elements.haControlPrepareButton, "Prüfe...", prepareHaControlCommand);
     }
   });
-  elements.refreshMemory.addEventListener("click", refreshMemory);
-  elements.memorySearchButton.addEventListener("click", searchMemory);
-  elements.memoryAddButton.addEventListener("click", addMemory);
+  elements.refreshMemory.addEventListener("click", () => withButtonLoading(elements.refreshMemory, "Lade...", refreshMemory));
+  elements.memorySearchButton.addEventListener("click", () => withButtonLoading(elements.memorySearchButton, "Suche...", searchMemory));
+  elements.memoryAddButton.addEventListener("click", () => withButtonLoading(elements.memoryAddButton, "Speichere...", addMemory));
   elements.memorySearchInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      searchMemory();
+      withButtonLoading(elements.memorySearchButton, "Suche...", searchMemory);
     }
   });
   elements.memoryAddInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      addMemory();
+      withButtonLoading(elements.memoryAddButton, "Speichere...", addMemory);
     }
   });
-  elements.refreshKnowledge.addEventListener("click", refreshKnowledge);
-  elements.knowledgeSearchButton.addEventListener("click", searchKnowledge);
-  elements.knowledgeIndexButton.addEventListener("click", indexKnowledgePath);
+  elements.refreshKnowledge.addEventListener("click", () => withButtonLoading(elements.refreshKnowledge, "Lade...", refreshKnowledge));
+  elements.knowledgeSearchButton.addEventListener("click", () => withButtonLoading(elements.knowledgeSearchButton, "Suche...", searchKnowledge));
+  elements.knowledgeIndexButton.addEventListener("click", () => withButtonLoading(elements.knowledgeIndexButton, "Indexiere...", indexKnowledgePath));
   elements.knowledgeSearchInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      searchKnowledge();
+      withButtonLoading(elements.knowledgeSearchButton, "Suche...", searchKnowledge);
     }
   });
   elements.knowledgeIndexInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      indexKnowledgePath();
+      withButtonLoading(elements.knowledgeIndexButton, "Indexiere...", indexKnowledgePath);
     }
   });
-  elements.refreshActions.addEventListener("click", refreshActions);
-  elements.runWatchers.addEventListener("click", async () => {
+  elements.refreshActions.addEventListener("click", () => withButtonLoading(elements.refreshActions, "Lade...", refreshActions));
+  elements.runWatchers.addEventListener("click", () => withButtonLoading(elements.runWatchers, "Prüfe...", async () => {
     try {
-      await postJson("/assistant/watchers/run", {});
+      await postJson("/assistant/watchers/run", {}, {
+        activityId: "watchers-run",
+        activityTitle: "Watcher werden ausgeführt",
+        activityDetail: "Regeln werden geprüft",
+      });
       await refreshAlerts();
+      finishActivity("watchers-run", "Watcher-Prüfung abgeschlossen.");
     } catch (error) {
       elements.errorPanel.hidden = false;
+      failActivity("watchers-run", "Watcher-Prüfung fehlgeschlagen.");
     }
-  });
+  }));
 }
 
-function initializeVoiceAvailability() {
-  if (!("speechSynthesis" in window)) {
-    setVoiceStatus("Sprachausgabe wird von diesem Browser nicht unterstützt.", "error");
-  }
+function initializeSpeechRecognitionAvailability() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
     setVoiceStatus("Sprachsteuerung nicht unterstützt.", "error");
   }
 }
 
+function initializeRemainingDashboardSafely() {
+  try {
+    initializeSpeechRecognitionAvailability();
+    updateClock();
+    refreshDashboard();
+    window.setInterval(updateClock, 1000);
+    window.setInterval(refreshDashboard, refreshMs);
+  } catch (error) {
+    reportDashboardBootError(error);
+  }
+}
+
 function initDashboard() {
   bindElements();
   wireEvents();
-  initializeVoiceAvailability();
-  updateClock();
-  refreshDashboard();
-  window.setInterval(updateClock, 1000);
-  window.setInterval(refreshDashboard, refreshMs);
+  initializeVoiceSubsystemSafely();
+  initializeRemainingDashboardSafely();
 }
 
-document.addEventListener("DOMContentLoaded", initDashboard);
+function reportDashboardBootError(error) {
+  console.error("[Hammer Jarvis] Dashboard-Bootstrap fehlgeschlagen.", error);
+  if (elements.errorPanel) {
+    elements.errorPanel.hidden = false;
+  }
+}
+
+function bootstrapDashboard() {
+  if (dashboardInitialized) {
+    return;
+  }
+  dashboardInitialized = true;
+  try {
+    initDashboard();
+  } catch (error) {
+    reportDashboardBootError(error);
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bootstrapDashboard, { once: true });
+} else {
+  bootstrapDashboard();
+}

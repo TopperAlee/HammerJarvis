@@ -11,7 +11,8 @@ The first version connects to Home Assistant through the REST API and exposes a 
 - Keep the project local-first.
 - Do not add cloud deployment.
 - Do not add Docker yet.
-- Do not add voice control yet.
+- Existing local browser-based voice recognition and speech output may be maintained or improved.
+- Do not add external or cloud-based TTS/STT services without explicit approval.
 - Do not add PLC write functions.
 - Do not add OpenAI API calls yet.
 - Do not hardcode secrets.
@@ -38,7 +39,7 @@ Use these dependencies for v0.1:
 Do not add LangChain for v0.1.
 Do not add a database for v0.1.
 Do not add unnecessary abstraction.
-Do not add a frontend yet.
+The existing local dashboard may be maintained or improved.
 
 ## Permission Model
 
