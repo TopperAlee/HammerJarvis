@@ -1080,6 +1080,307 @@ Bestaetige Aktion 1.
 Aktion 1 ablehnen.
 ```
 
+## Freihändige Sprachsteuerung: Jarvis
+
+Das bisherige browsergebundene Wake-Word bleibt nur ein optionaler Fallback.
+Die robuste Windows-first-Variante ist der `Hammer Jarvis Desktop Agent`.
+
+## Hammer Jarvis Desktop Agent
+
+Hammer Jarvis nutzt bewusst keinen klassischen Windows-Dienst. Ein Dienst läuft
+nicht zuverlässig im interaktiven Benutzerkontext und kann Browser/Mikrofon/UI
+nicht sauber öffnen. Stattdessen startet ein Desktop-Agent über die
+Windows-Aufgabenplanung bei der Benutzeranmeldung.
+
+Eigenschaften:
+
+- Start im Benutzerkontext, RunLevel `Limited`, keine Administratorrechte.
+- Genau eine Instanz über `Local\HammerJarvisDesktopAgent`.
+- Prüft `http://127.0.0.1:8001/assistant/health`.
+- Startet das Backend kontrolliert, falls es nicht läuft.
+- Lauscht lokal auf das einzelne Wake Word `Jarvis`.
+- Öffnet das Dashboard nur, wenn kein Dashboard verbunden ist.
+- Sendet ein Wake-Ereignis an `WebSocket /assistant/desktop/events`.
+- Speichert und loggt keine Audiodaten.
+- Das Wake Word löst nur die Befehlserkennung aus; alle Aktionen laufen weiter
+  über Orchestrator, Permission Layer und Bestätigungsregeln.
+
+Installation:
+
+```powershell
+.\scripts\install-desktop-agent.ps1
+```
+
+Manuell starten/stoppen/status prüfen:
+
+```powershell
+.\scripts\start-desktop-agent.ps1
+.\scripts\status-desktop-agent.ps1
+.\scripts\stop-desktop-agent.ps1
+```
+
+Deinstallation der geplanten Aufgabe:
+
+```powershell
+.\scripts\uninstall-desktop-agent.ps1
+```
+
+Konfiguration in `.env`:
+
+```text
+DESKTOP_AGENT_ENABLED=true
+DESKTOP_AGENT_START_BACKEND=true
+DESKTOP_AGENT_OPEN_BROWSER_ON_WAKE=true
+DESKTOP_AGENT_DASHBOARD_URL=http://127.0.0.1:8001/dashboard
+DESKTOP_AGENT_PYTHON_EXECUTABLE=
+DESKTOP_AGENT_BACKEND_TIMEOUT_SECONDS=30
+DESKTOP_AGENT_DASHBOARD_TIMEOUT_SECONDS=10
+DESKTOP_AGENT_READY_ANNOUNCEMENT=true
+DESKTOP_AGENT_READY_TEXT=Alle Systeme online und bereit
+WAKE_ENGINE=windows_speech
+WAKE_WORD=Jarvis
+WAKE_CONFIDENCE_THRESHOLD=0.40
+WAKE_COOLDOWN_MS=3500
+WAKE_LISTENER_READY_TIMEOUT_SECONDS=15
+WAKE_RECOGNIZER_CULTURE=auto
+WAKE_ACCEPTED_TRANSCRIPTS=Jarvis,Jervis,Dschawis
+COMMAND_RECOGNITION_TIMEOUT_MS=9000
+```
+
+Der Desktop-Agent und das von ihm gestartete Backend verwenden deterministisch
+die Projekt-venv unter `.venv\Scripts`. Bevorzugt wird:
+
+```text
+D:\Dev\projects\HammerJarvis\.venv\Scripts\pythonw.exe
+```
+
+Falls `pythonw.exe` fehlt, wird `.venv\Scripts\python.exe` genutzt. Ein stiller
+Fallback auf globales Python ist nicht erlaubt, wenn die Projekt-venv fehlt
+oder der Agent aus einem anderen Interpreter gestartet wurde. Optional kann
+`DESKTOP_AGENT_PYTHON_EXECUTABLE` gesetzt werden, muss dann aber auf einen
+existierenden lokalen Interpreter zeigen.
+
+Vor dem Backendstart prueft der Agent lokal, ob `fastapi`, `uvicorn` und ein
+WebSocket-Transport (`websockets` oder `wsproto`) im ausgewaehlten Interpreter
+importierbar sind. `websockets` ist deshalb in `requirements.txt` enthalten.
+
+Wake Engine:
+
+- Standard: `windows_speech`
+- Bevorzugte Culture: `de-DE`
+- Fallback: `en-US`
+- Synchrone Windows-Speech-Schleife im Haupt-Runspace, keine asynchronen
+  PowerShell-Callbacks fuer die Wake-Erkennung.
+- Grammatik: ausschließlich `Jarvis`, `Jervis` und `Dschawis` als enge
+  Aussprachevarianten.
+- `WAKE_RECOGNIZER_CULTURE=auto` prueft zuerst `de-DE`, dann `en-US`,
+  danach einen anderen installierten Recognizer.
+- Fuer den englischen Eigennamen kann `WAKE_RECOGNIZER_CULTURE=en-US`
+  gezielt getestet werden.
+- `WAKE_ACCEPTED_TRANSCRIPTS=Jarvis,Jervis,Dschawis` erlaubt nur interne
+  Aussprachevarianten und normalisiert jedes Wake-Ereignis auf `Jarvis`.
+
+Ein kurzes Einwort-Wake-Word kann Fehlaktivierungen verursachen. Erhöhe bei
+Bedarf `WAKE_CONFIDENCE_THRESHOLD`, prüfe Windows-Mikrofoneinstellungen und
+installierte Sprachpakete (`de-DE` oder `en-US`). Der Standardwert ist `0.40`.
+Für die Kalibrierung ist typischerweise ein Bereich zwischen `0.35` und `0.60`
+sinnvoll. Niedrigere Werte erhöhen das Risiko für Fehlaktivierungen.
+Windows erkennt die deutsche Aussprache von `Jarvis` teilweise als `Jervis`
+oder `Dschawis`; diese Varianten werden intern auf `Jarvis` normalisiert.
+
+Ready-Ansage:
+
+Wenn Agent, Einzelinstanz, Backend, Wake Engine und Event-Brücke bereit sind,
+sagt Jarvis einmal pro Agentstart lokal:
+
+```text
+Alle Systeme online und bereit
+```
+
+Die Ansage nutzt `System.Speech.Synthesis.SpeechSynthesizer` über
+`scripts/speak-local.ps1`. Fehler bei der Ansage blockieren den Agent nicht.
+Der Agent versucht die Ansage erst, nachdem der Wake Listener eine gültige
+JSON-Ready-Nachricht gesendet hat.
+
+Dashboard-Verhalten:
+
+- Wenn ein Dashboard verbunden ist, wird kein neuer Tab geöffnet.
+- Wenn kein Dashboard verbunden ist, öffnet der Agent
+  `http://127.0.0.1:8001/dashboard?source=desktop-agent`.
+- Das Dashboard startet danach die bestehende Browser-Befehlserkennung.
+- Die Browser-Befehlserkennung kann je nach Browser einen externen
+  Browserdienst verwenden. Hammer Jarvis behauptet daher nicht, dass die
+  vollständige Befehlserkennung garantiert offline ist.
+- Mikrofonzugriff muss im Browser erlaubt werden.
+
+Lokale Endpunkte:
+
+```text
+GET       http://127.0.0.1:8001/assistant/health
+GET       http://127.0.0.1:8001/assistant/desktop/status
+POST      http://127.0.0.1:8001/assistant/desktop/wake
+WebSocket ws://127.0.0.1:8001/assistant/desktop/events
+```
+
+Logs:
+
+```text
+%LOCALAPPDATA%\HammerJarvis\logs\desktop-agent.log
+```
+
+Logs mit UTF-8 lesen:
+
+```powershell
+Get-Content -Encoding UTF8 "$env:LOCALAPPDATA\HammerJarvis\logs\desktop-agent.log" -Wait
+```
+
+Der Desktop Agent meldet `READY` erst, wenn Backend, Event-Brücke,
+Wake-Listener-Prozess, Listener-JSON-Handshake und Prozesszustand bereit sind.
+Der Wake Listener muss vorher genau eine JSON-Zeile `type=ready` auf stdout
+senden. Diagnoseausgaben gehen nach stderr.
+
+Direkter Wake-Listener-Test ohne Mikrofon:
+
+```powershell
+.\scripts\jarvis-wake-listener.ps1 -TestEmitReady
+```
+
+Recognizer auflisten:
+
+```powershell
+Add-Type -AssemblyName System.Speech
+[System.Speech.Recognition.SpeechRecognitionEngine]::InstalledRecognizers() |
+    Select Id,Name,Culture,Description
+```
+
+Wake-Diagnose mit automatischer Culture:
+
+```powershell
+.\scripts\test-jarvis-wake.ps1 `
+    -Culture auto `
+    -Threshold 0.40 `
+    -DurationSeconds 20 `
+    -ShowRecognizedText
+```
+
+Wake-Diagnose mit `de-DE`:
+
+```powershell
+.\scripts\test-jarvis-wake.ps1 `
+    -Culture de-DE `
+    -Threshold 0.40 `
+    -DurationSeconds 20 `
+    -ShowRecognizedText
+```
+
+Wake-Diagnose mit `en-US`, sofern installiert:
+
+```powershell
+.\scripts\test-jarvis-wake.ps1 `
+    -Culture en-US `
+    -Threshold 0.40 `
+    -DurationSeconds 20 `
+    -ShowRecognizedText
+```
+
+Während jedes Tests mehrmals deutlich `Jarvis` sagen.
+
+Interpretation:
+
+- `recognized=0`: Mikrofon, Aussprache, Culture oder Recognizer prüfen.
+- `rejected>0`: Threshold, Aussprache oder AcceptedTranscripts prüfen.
+- Erkanntes `Jervis` oder `Dschawis`: diese Varianten werden intern auf
+  `Jarvis` normalisiert.
+- `wake_detected > 0`: Wake-Erkennung funktioniert.
+
+Direkter Ansage-Validierungstest ohne Sprechen:
+
+```powershell
+.\scripts\speak-local.ps1 -ValidateOnly
+```
+
+Manueller End-to-End-Test:
+
+1. Agent stoppen: `.\scripts\stop-desktop-agent.ps1`
+2. Wake Listener direkt starten: `.\scripts\test-jarvis-wake.ps1 -Culture auto -Threshold 0.40 -DurationSeconds 20 -ShowRecognizedText`
+3. Prüfen, dass eine JSON-Zeile `type=ready` erscheint.
+4. `Jarvis` sagen.
+5. Prüfen, dass `wake_detected` mit `word=Jarvis` erscheint.
+6. Listener mit `Strg+C` beenden.
+7. Ansage manuell testen: `.\scripts\speak-local.ps1 -Text "Alle Systeme online und bereit"`
+8. Agent starten: `.\scripts\start-desktop-agent.ps1`
+9. Log mit `Get-Content -Encoding UTF8 "$env:LOCALAPPDATA\HammerJarvis\logs\desktop-agent.log" -Wait` beobachten.
+10. Status prüfen: `.\scripts\status-desktop-agent.ps1`
+11. Prüfen, dass `READY` erst nach `wake_listener_ready` erscheint.
+12. Prüfen, dass die Bereitschaftsansage genau einmal gesprochen wird.
+13. `Jarvis` sagen.
+14. Browseröffnung und Befehlserkennung prüfen.
+15. Listenerprozess testweise beenden.
+16. Prüfen, dass der Agent `DEGRADED` meldet und nur begrenzt neu startet.
+
+Fehlerbehebung:
+
+- Backend nicht erreichbar: `.\scripts\start-jarvis.ps1` oder
+  `.\scripts\status-desktop-agent.ps1` prüfen.
+- Wake Engine DEGRADED: Windows-Spracherkennung und Sprachpakete prüfen.
+- Dashboard öffnet nicht: Standardbrowser und Port `8001` prüfen.
+- Browser hört nicht zu: Mikrofonberechtigung für `127.0.0.1` erlauben.
+- Bei Standby/Resume kann der Agent den Wake Listener neu starten; Reconnects
+  sind begrenzt und laufen nicht in schneller Endlosschleife.
+
+Späteres eigenes openWakeWord-Modell:
+
+`WAKE_ENGINE=openwakeword_custom` ist vorbereitet, wird aber nur genutzt, wenn
+`WAKE_WORD_MODEL_PATH=app/data/models/wake/jarvis.onnx` tatsächlich existiert.
+Das vorhandene Modell `hey_jarvis` wird nicht stillschweigend als Ersatz für
+`Jarvis` verwendet. Modelle werden nicht automatisch heruntergeladen und nicht
+ins Repository committed.
+
+## Browser-Wake-Fallback
+
+Das Dashboard kann optional lokal über den Browser-Fallback lauschen. Dieser
+Fallback ist nicht der Desktop-Agent und wird im UI entsprechend markiert.
+Es werden keine Audiodaten gespeichert oder geloggt.
+
+Die Funktion ist standardmäßig ausgeschaltet. Die normalen Schaltflächen
+`Sprechen`, Chat-Eingabe und Sprachausgabe bleiben unverändert nutzbar.
+
+Optionale Installation:
+
+```powershell
+.\scripts\setup-wake-word.ps1
+```
+
+Danach in `.env` aktivieren:
+
+```text
+WAKE_WORD_ENABLED=true
+WAKE_WORD=Jarvis
+WAKE_WORD_MODEL_PATH=app/data/models/wake/jarvis.onnx
+WAKE_WORD_THRESHOLD=0.5
+WAKE_WORD_ALLOWED_ORIGINS=http://127.0.0.1:8001;http://localhost:8001
+```
+
+Dashboard öffnen:
+
+```text
+http://127.0.0.1:8001/dashboard
+```
+
+Dann `Browser-Fallback: Ein` anklicken und den Mikrofonzugriff erlauben. Dieser
+Fallback nutzt nur ein explizit konfiguriertes eigenes openWakeWord-Modell.
+Fehlt `WAKE_WORD_MODEL_PATH`, bleibt der Fallback deaktiviert/degradiert und
+fällt nicht auf ein anderes eingebautes Modell zurück. Je nach Browser kann die
+anschließende Spracherkennung einen externen Browserdienst verwenden; die
+Wake-Erkennung selbst bleibt lokal.
+
+Lokale Endpunkte:
+
+```text
+GET       http://127.0.0.1:8001/assistant/voice/wake/status
+WebSocket ws://127.0.0.1:8001/assistant/voice/wake/stream
+```
+
 ## Tests
 
 ```powershell
@@ -1093,7 +1394,7 @@ Die Tests verwenden keinen echten Home Assistant Server.
 - Kein Frontend
 - Kein Docker
 - Keine Datenbank
-- Keine Python-Audiofunktionen, kein Wake Word und kein Always-Listening-Modus
+- Keine Python-Audiofunktionen im Basissystem. Wake Word ist optional lokal ueber `requirements-voice.txt`.
 - Keine PLC-Verbindung
 - Keine autonomen Aktionen
 - Kein Cloud-Deployment

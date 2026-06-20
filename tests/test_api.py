@@ -2,9 +2,18 @@ from fastapi.testclient import TestClient
 from pathlib import Path
 
 from app.main import app
+from app.desktop_agent.event_bridge import desktop_event_bridge
 
 
 client = TestClient(app)
+
+
+def reset_desktop_event_bridge() -> None:
+    desktop_event_bridge.clients.clear()
+    desktop_event_bridge.pending_wake_event = None
+    desktop_event_bridge.pending_wake_expires_at = None
+    desktop_event_bridge.last_dashboard_heartbeat = None
+    desktop_event_bridge.last_wake_event = None
 
 
 def test_root_returns_status() -> None:
@@ -590,3 +599,262 @@ def test_turn_on_without_confirm_does_not_execute(monkeypatch) -> None:
     assert response.json()["confirmation_required"] is True
     assert response.json()["risk"] == "YELLOW"
     assert called is False
+
+
+def test_wake_word_status_endpoint_returns_safe_defaults() -> None:
+    response = client.get("/assistant/voice/wake/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["enabled"] is False
+    assert data["wake_word"] == "Jarvis"
+    assert data["model"] == ""
+    assert data["audio_stored"] is False
+    assert data["sample_rate"] == 16000
+    assert data["frame_ms"] == 80
+
+
+def test_env_example_has_no_active_hey_jarvis_default() -> None:
+    content = Path(".env.example").read_text(encoding="utf-8")
+
+    assert "WAKE_ENGINE=windows_speech" in content
+    assert "WAKE_WORD=Jarvis" in content
+    assert "WAKE_CONFIDENCE_THRESHOLD=0.40" in content
+    assert "WAKE_RECOGNIZER_CULTURE=auto" in content
+    assert "WAKE_ACCEPTED_TRANSCRIPTS=Jarvis,Jervis,Dschawis" in content
+    assert "WAKE_WORD_MODEL=hey_jarvis" not in content
+
+
+def test_setup_wake_word_script_does_not_suggest_hey_jarvis() -> None:
+    content = Path("scripts/setup-wake-word.ps1").read_text(encoding="utf-8")
+
+    assert "WAKE_ENGINE=windows_speech" in content
+    assert "WAKE_WORD_MODEL_PATH=app/data/models/wake/jarvis.onnx" in content
+    assert "WAKE_WORD_MODEL=hey_jarvis" not in content
+
+
+def test_desktop_agent_scripts_expose_safe_test_modes_and_utf8_status() -> None:
+    listener = Path("scripts/jarvis-wake-listener.ps1").read_text(encoding="utf-8")
+    speech = Path("scripts/speak-local.ps1").read_text(encoding="utf-8")
+    status = Path("scripts/status-desktop-agent.ps1").read_text(encoding="utf-8")
+    calibration = Path("scripts/test-jarvis-wake.ps1").read_text(encoding="utf-8")
+
+    assert "[switch]$TestEmitReady" in listener
+    assert "[switch]$Diagnostics" in listener
+    assert "[switch]$ShowRecognizedText" in listener
+    assert "[int]$ProbeSeconds" in listener
+    assert "RecognizeAsync" not in listener
+    assert "add_SpeechRecognized" not in listener
+    assert "add_AudioStateChanged" not in listener
+    assert "$engine.Recognize(" in listener
+    assert "[TimeSpan]::FromMilliseconds(750)" in listener
+    assert "$ProbeSeconds -gt 0" in listener
+    assert 'type = "ready"' in listener
+    assert 'type = "diagnostic_summary"' in listener
+    assert "-Completed $true" in listener
+    assert "-Completed $false" in listener
+    assert "wake_word = \"Jarvis\"" in listener
+    assert '"hey jarvis"' in listener.lower()
+    assert 'word = "Jarvis"' in listener
+    assert "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)" in listener
+    assert "[Console]::Error.WriteLine" in listener
+    assert "[switch]$ValidateOnly" in speech
+    assert "Invoke-Expression" not in speech
+    assert "Get-Content -Encoding UTF8" in status
+    assert "Schwellwert:" in status
+    assert "Sagen Sie jetzt mehrmals deutlich: Jarvis" in calibration
+    assert "-RecognizerCulture" in calibration
+    assert "diagnostic_summary" in calibration
+    assert "$process.ExitCode" in calibration
+    assert "$summaryCount -ne 1" in calibration
+
+
+def test_readme_only_mentions_hey_jarvis_as_non_default_explanation() -> None:
+    content = Path("README.md").read_text(encoding="utf-8")
+
+    assert "WAKE_WORD_MODEL=hey_jarvis" not in content
+    assert "nicht stillschweigend als Ersatz" in content
+
+
+def test_dashboard_contains_hands_free_voice_controls() -> None:
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    html = response.text
+    assert '<meta charset="UTF-8">' in html
+    assert 'id="handsFreeToggle"' in html
+    assert 'id="desktopAgentStatus"' in html
+    assert "Wake Word:" in html
+    assert ">Jarvis<" in html
+    assert "Audiodaten werden nicht gespeichert" in html
+    assert "Hey Jarvis" not in html
+
+
+def test_wake_word_audio_worklet_is_served() -> None:
+    response = client.get("/static/audio/wake-word-processor.js")
+
+    assert response.status_code == 200
+    assert "registerProcessor(\"wake-word-processor\"" in response.text
+
+
+def test_dashboard_js_has_hands_free_state_machine() -> None:
+    response = client.get("/static/dashboard.js")
+
+    assert response.status_code == 200
+    js = response.text
+    assert "HANDS_FREE_STATES" in js
+    assert "/assistant/voice/wake/stream" in js
+    assert "getUserMedia" in js
+    assert "playWakeBeep" in js
+    assert "startCommandRecognition" in js
+    assert "Verbindung zur lokalen Weckwort-Erkennung" in js
+
+
+def test_assistant_health_endpoint_returns_ready() -> None:
+    response = client.get("/assistant/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+
+
+def test_desktop_status_endpoint_returns_bridge_status() -> None:
+    reset_desktop_event_bridge()
+    response = client.get("/assistant/desktop/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["dashboard_clients"] >= 0
+    assert data["wake_word"] == "Jarvis"
+    assert data["audio_stored"] is False
+    for key in [
+        "agent_state",
+        "backend_ready",
+        "event_bridge_ready",
+        "wake_listener_ready",
+        "wake_listener_alive",
+        "wake_listener_pid",
+        "wake_audio_ready",
+        "wake_audio_state",
+        "wake_last_audio_level",
+        "wake_last_audio_at",
+        "wake_last_speech_detected_at",
+        "wake_last_rejected_confidence",
+        "wake_engine",
+        "wake_culture",
+        "wake_recognizer",
+        "wake_threshold",
+        "wake_ready_at",
+        "last_wake_detection_at",
+        "ready_announcement_enabled",
+        "ready_announcement_attempted",
+        "ready_announcement_succeeded",
+        "ready_announcement_error",
+        "agent_python",
+        "backend_python",
+        "project_root",
+        "websocket_transport",
+        "backend_pid",
+    ]:
+        assert key in data
+    serialized = str(data).lower()
+    assert "token" not in serialized
+    assert "secret" not in serialized
+
+
+def test_desktop_wake_endpoint_returns_without_dashboard_client() -> None:
+    reset_desktop_event_bridge()
+    response = client.post(
+        "/assistant/desktop/wake",
+        json={"wake_word": "Jarvis", "source": "desktop_agent", "confidence": 0.9},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["event"]["wake_word"] == "Jarvis"
+    assert data["sent"] == 0
+
+
+def test_desktop_event_websocket_accepts_client_and_counts_disconnect() -> None:
+    reset_desktop_event_bridge()
+
+    with client.websocket_connect("/assistant/desktop/events", headers={"origin": "http://testserver"}) as websocket:
+        status = websocket.receive_json()
+        assert status["type"] == "desktop_status"
+        assert client.get("/assistant/desktop/status").json()["dashboard_clients"] == 1
+
+    assert client.get("/assistant/desktop/status").json()["dashboard_clients"] == 0
+
+
+def test_desktop_event_websocket_accepts_same_origin_non_8001_port() -> None:
+    reset_desktop_event_bridge()
+
+    with client.websocket_connect(
+        "/assistant/desktop/events",
+        headers={"host": "127.0.0.1:8000", "origin": "http://127.0.0.1:8000"},
+    ) as websocket:
+        status = websocket.receive_json()
+        assert status["type"] == "desktop_status"
+        assert client.get("/assistant/desktop/status").json()["dashboard_clients"] == 1
+
+
+def test_desktop_wake_event_is_sent_to_connected_client() -> None:
+    reset_desktop_event_bridge()
+
+    with client.websocket_connect("/assistant/desktop/events", headers={"origin": "http://testserver"}) as websocket:
+        websocket.receive_json()
+        response = client.post(
+            "/assistant/desktop/wake",
+            json={"wake_word": "Jarvis", "source": "desktop_agent", "confidence": 0.475},
+        )
+        assert response.status_code == 200
+        assert response.json()["sent"] == 1
+        event = websocket.receive_json()
+        assert event["type"] == "wake_detected"
+        assert event["wake_word"] == "Jarvis"
+        assert event["source"] == "desktop_agent"
+        assert event["confidence"] == 0.475
+
+
+def test_pending_wake_event_is_delivered_once_to_later_client() -> None:
+    reset_desktop_event_bridge()
+
+    response = client.post(
+        "/assistant/desktop/wake",
+        json={"wake_word": "Jarvis", "source": "desktop_agent", "confidence": 0.5},
+    )
+    assert response.status_code == 200
+    assert response.json()["sent"] == 0
+    assert client.get("/assistant/desktop/status").json()["pending_wake_event"] is True
+
+    with client.websocket_connect("/assistant/desktop/events", headers={"origin": "http://testserver"}) as websocket:
+        event = websocket.receive_json()
+        assert event["type"] == "wake_detected"
+        assert event["wake_word"] == "Jarvis"
+        status = websocket.receive_json()
+        assert status["type"] == "desktop_status"
+        assert status["pending_wake_event"] is False
+
+    assert client.get("/assistant/desktop/status").json()["pending_wake_event"] is False
+
+
+def test_dashboard_desktop_event_bridge_assets_are_present() -> None:
+    js = client.get("/static/dashboard.js").text
+
+    assert "/assistant/desktop/events" in js
+    assert "DESKTOP_EVENT_RECONNECT_DELAYS_MS = [1000, 2000, 5000]" in js
+    assert "handleDesktopEvent" in js
+    assert "startCommandRecognition({" in js
+    assert "source: \"desktop_agent\"" in js
+    assert "elements.voiceButton.addEventListener(\"click\", () => withButtonLoading(elements.voiceButton, \"Hört zu...\", startVoiceRecognition))" not in js
+def test_dashboard_desktop_event_bridge_uses_same_origin_websocket_and_guards_recognition() -> None:
+    js = client.get("/static/dashboard.js").text
+
+    assert "function buildDesktopEventSocketUrl" in js
+    assert 'locationSource.protocol === "https:" ? "wss:" : "ws:"' in js
+    assert "`${protocol}//${locationSource.host}/assistant/desktop/events`" in js
+    assert "new WebSocket(buildDesktopEventSocketUrl())" in js
+    assert "window.HammerJarvisDashboard" in js
+    assert "HANDS_FREE_STATES.COMMAND_LISTENING" in js
+    assert "HANDS_FREE_STATES.PROCESSING" in js
+    assert "HANDS_FREE_STATES.SPEAKING" in js
+    assert "elements.voiceButton.addEventListener(\"click\", () => startCommandRecognition({ source: \"button\", autoSend: true }))" in js

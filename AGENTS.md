@@ -24,6 +24,17 @@ The first version connects to Home Assistant through the REST API and exposes a 
 - Add clear error handling.
 - Add German README instructions for Windows PowerShell.
 - Do not expose tokens in logs or API responses.
+- Browser wake-word support is optional and local-only.
+- Keep wake-word dependencies outside the base requirements file.
+- Do not store or log raw audio.
+- Keep manual dashboard speech controls working when wake-word mode is disabled.
+- Desktop-Agent is local and Windows-first.
+- Microphone access is only for wake and speech features.
+- Never log audio content or raw audio.
+- The Desktop-Agent must not bypass permission rules.
+- Autostart runs in the interactive user context and must not require administrator rights.
+- The browser may only be opened locally.
+- Cloud speech services require explicit approval and transparent documentation.
 
 ## Dependencies
 

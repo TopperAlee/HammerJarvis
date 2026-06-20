@@ -621,12 +621,43 @@ h1 {
   box-shadow: 0 0 24px rgba(0, 229, 255, 0.3);
 }
 
+.hands-free-toggle {
+  position: absolute;
+  bottom: 92px;
+  min-width: 180px;
+  border: 1px solid rgba(0, 255, 198, 0.65);
+  border-radius: 999px;
+  padding: 11px 20px;
+  background: rgba(0, 255, 198, 0.1);
+  color: var(--teal);
+  font-weight: 900;
+  text-transform: uppercase;
+  box-shadow: 0 0 18px rgba(0, 255, 198, 0.18);
+}
+
+.hands-free-toggle.active,
+.hands-free-panel.active {
+  border-color: var(--teal);
+  box-shadow: 0 0 28px rgba(0, 255, 198, 0.25);
+}
+
 .voice-status {
   position: absolute;
   bottom: 14px;
   margin: 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+.hands-free-status {
+  position: absolute;
+  bottom: 4px;
+  transform: translateY(100%);
+  max-width: min(520px, 90%);
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
 }
 
 .voice-status.active {
@@ -646,6 +677,19 @@ h1 {
   border-color: var(--amber);
   color: var(--amber);
   box-shadow: 0 0 34px rgba(255, 176, 32, 0.38);
+}
+
+.jarvis-core.hands-free-armed .ring-two {
+  border-color: var(--teal);
+  box-shadow: 0 0 38px rgba(0, 255, 198, 0.36);
+}
+
+.jarvis-core.wake-detected .ring-three,
+.hands-free-toggle.wake-detected {
+  border-color: var(--amber);
+  color: var(--amber);
+  box-shadow: 0 0 38px rgba(255, 176, 32, 0.35);
+  animation: pulseCore 950ms ease-in-out infinite;
 }
 
 .energy-readout {
@@ -836,6 +880,44 @@ select:focus {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.hands-free-panel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 13px;
+  border: 1px solid rgba(0, 229, 255, 0.2);
+  border-radius: 12px;
+  background: rgba(3, 18, 28, 0.62);
+}
+
+.hands-free-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hands-free-row strong {
+  color: var(--teal);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hands-free-panel p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.hands-free-panel.error {
+  border-color: rgba(255, 77, 109, 0.55);
+}
+
+.hands-free-panel.error strong,
+.hands-free-panel.error p {
+  color: var(--red);
 }
 
 .voice-loading-status {

@@ -105,7 +105,9 @@
               </div>
             </div>
             <button id="voiceButton" class="core-mic" type="button">Sprechen</button>
+            <button id="handsFreeToggle" class="hands-free-toggle" type="button">Browser-Fallback: Aus</button>
             <p id="voiceStatus" class="voice-status">Sprachsteuerung bereit.</p>
+            <p id="handsFreeStatus" class="hands-free-status">Desktop-Agent: Nicht verbunden.</p>
           </section>
 
           <section id="energy" class="hud-panel energy-panel">
@@ -358,6 +360,18 @@
               <span id="voiceProgressText" aria-hidden="true">Versuch 1 von 6 · 0 Sekunden</span>
               <span id="voiceSelectStatus">Browser-Stimmen werden geladen.</span>
               <span id="voiceDiagnosticText">TTS API: wird geprüft · getVoices(): - · Zustand: idle</span>
+            </div>
+            <div class="hands-free-panel" aria-live="polite">
+              <div class="hands-free-row">
+                <strong>Desktop-Agent</strong>
+                <button id="desktopReconnectButton" class="ghost-button" type="button">Neu verbinden</button>
+              </div>
+              <p>Wake Word: <strong id="desktopWakeWord">Jarvis</strong></p>
+              <p>Agent: <strong id="desktopAgentStatus">Nicht verbunden</strong></p>
+              <p>Wake Engine: <strong id="desktopWakeEngine">Windows Speech</strong></p>
+              <p id="handsFreeDetails">Browsergebundener Wake-Modus ist nur ein optionaler Fallback. Audiodaten werden nicht gespeichert.</p>
+              <button id="handsFreeChatToggle" class="ghost-button" type="button">Browser-Fallback: Aus</button>
+              <p class="muted">Die anschließende Browser-Spracherkennung kann abhängig vom Browser einen externen Erkennungsdienst verwenden.</p>
             </div>
             <div id="chatLog" class="chat-log" aria-live="polite">
               <div class="chat-message assistant">

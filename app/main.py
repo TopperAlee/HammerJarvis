@@ -3,9 +3,10 @@ import time
 import threading
 from typing import Any
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -25,6 +26,9 @@ from app.assistant.missions import MissionController, get_mission_definitions
 from app.assistant.priority_engine import PriorityEngine
 from app.assistant.skills.skill_registry import SkillRegistry
 from app.assistant.system_prompt import SYSTEM_PROMPT
+from app.assistant.voice.wake_word_events import error_event, ready_event, status_event
+from app.assistant.voice.wake_word_service import wake_word_service
+from app.desktop_agent.event_bridge import desktop_event_bridge
 from app.assistant.session_state import open_best_match, open_result_by_index, session_state
 from app.assistant.tool_registry import ToolRegistry
 from app.config.personal_priority_rules import (
@@ -332,6 +336,50 @@ class SkillWebResearchRequest(BaseModel):
     query: str = Field(min_length=1)
 
 
+class DesktopWakeRequest(BaseModel):
+    type: str = "wake_detected"
+    wake_word: str = "Jarvis"
+    source: str = "desktop_agent"
+    engine: str | None = None
+    culture: str | None = None
+    confidence: float | None = None
+    timestamp: str | None = None
+
+
+class DesktopHeartbeatRequest(BaseModel):
+    state: str = "READY"
+    agent_state: str | None = None
+    description: str | None = None
+    backend_ready: bool | None = None
+    event_bridge_ready: bool | None = None
+    wake_listener_ready: bool | None = None
+    wake_listener_alive: bool | None = None
+    wake_listener_pid: int | None = None
+    wake_audio_ready: bool | None = None
+    wake_audio_state: str | None = None
+    wake_last_audio_level: int | None = None
+    wake_last_audio_at: str | None = None
+    wake_last_speech_detected_at: str | None = None
+    wake_last_rejected_confidence: float | None = None
+    wake_engine: str | None = None
+    wake_word: str | None = None
+    wake_culture: str | None = None
+    wake_recognizer: str | None = None
+    wake_threshold: float | None = None
+    wake_ready_at: str | None = None
+    last_wake_detection_at: str | None = None
+    last_error: str | None = None
+    ready_announcement_enabled: bool | None = None
+    ready_announcement_attempted: bool | None = None
+    ready_announcement_succeeded: bool | None = None
+    ready_announcement_error: str | None = None
+    agent_python: str | None = None
+    backend_python: str | None = None
+    project_root: str | None = None
+    websocket_transport: str | None = None
+    backend_pid: int | None = None
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {
@@ -341,9 +389,111 @@ def root() -> dict[str, str]:
     }
 
 
+@app.get("/assistant/health")
+def assistant_health() -> dict[str, str]:
+    return {
+        "status": "ready",
+        "version": "0.1",
+        "mode": "local-windows",
+    }
+
+
 @app.get("/dashboard")
 def dashboard() -> FileResponse:
     return FileResponse(STATIC_DIR / "dashboard.html", media_type="text/html")
+
+
+@app.get("/assistant/voice/wake/status")
+def assistant_voice_wake_status() -> dict[str, Any]:
+    return wake_word_service.status()
+
+
+@app.get("/assistant/desktop/status")
+def assistant_desktop_status() -> dict[str, Any]:
+    return desktop_event_bridge.status()
+
+
+@app.post("/assistant/desktop/agent-heartbeat")
+def assistant_desktop_agent_heartbeat(request: DesktopHeartbeatRequest) -> dict[str, Any]:
+    payload = request.model_dump(exclude_none=True)
+    if "agent_state" not in payload:
+        payload["agent_state"] = payload.pop("state", "READY")
+    return desktop_event_bridge.heartbeat(payload)
+
+
+@app.post("/assistant/desktop/wake")
+async def assistant_desktop_wake(request: DesktopWakeRequest) -> dict[str, Any]:
+    return await desktop_event_bridge.broadcast_wake(request.model_dump())
+
+
+@app.websocket("/assistant/desktop/events")
+async def assistant_desktop_events(websocket: WebSocket) -> None:
+    origin = (websocket.headers.get("origin") or "").rstrip("/")
+    host = websocket.headers.get("host") or ""
+    if not _desktop_event_origin_allowed(origin, host):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    await desktop_event_bridge.connect_dashboard(websocket)
+    try:
+        await websocket.send_json({"type": "desktop_status", **desktop_event_bridge.status()})
+        while True:
+            message = await websocket.receive_json()
+            if isinstance(message, dict) and message.get("type") == "heartbeat":
+                await websocket.send_json({"type": "desktop_status", **desktop_event_bridge.dashboard_heartbeat()})
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await desktop_event_bridge.disconnect_dashboard(websocket)
+
+
+def _desktop_event_origin_allowed(origin: str, host: str) -> bool:
+    if not origin:
+        return True
+    parsed = urlparse(origin)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    origin_host = parsed.netloc.lower()
+    request_host = (host or "").lower()
+    if origin_host == request_host:
+        return True
+    local_hosts = {"127.0.0.1", "localhost"}
+    origin_name, _, origin_port = origin_host.partition(":")
+    request_name, _, request_port = request_host.partition(":")
+    return origin_name in local_hosts and request_name in local_hosts and origin_port == request_port
+
+
+@app.websocket("/assistant/voice/wake/stream")
+async def assistant_voice_wake_stream(websocket: WebSocket) -> None:
+    if not wake_word_service.origin_allowed(websocket.headers.get("origin")):
+        await websocket.close(code=1008)
+        return
+
+    if not await wake_word_service.connect_client():
+        await websocket.accept()
+        await websocket.send_json(error_event("max_clients", "Es ist bereits ein Wake-Word-Client verbunden."))
+        await websocket.close(code=1013)
+        return
+
+    config = wake_word_service.config
+    await websocket.accept()
+    try:
+        await websocket.send_json(ready_event(config.model, config.sample_rate, config.frame_ms))
+        await websocket.send_json(status_event("listening"))
+        while True:
+            message = await websocket.receive()
+            frame = message.get("bytes")
+            if frame is not None:
+                await websocket.send_json(await wake_word_service.process_frame(frame))
+                continue
+            if message.get("text") is not None:
+                await websocket.send_json(error_event("invalid_message", "Nur binaere PCM-Frames werden akzeptiert."))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await wake_word_service.disconnect_client()
 
 
 @app.post("/chat")

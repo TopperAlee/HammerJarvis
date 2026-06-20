@@ -26,8 +26,25 @@ const VOICE_LOAD_STATES = {
 const VOICE_RETRY_DELAYS_MS = [0, 100, 300, 750, 1500, 3000];
 const VOICE_LOAD_WATCHDOG_MS = 5500;
 const VOICE_LOAD_ELAPSED_UPDATE_MS = 250;
+const HANDS_FREE_STATES = {
+  DISABLED: "disabled",
+  STARTING: "starting",
+  ARMED: "armed",
+  WAKE_DETECTED: "wake_detected",
+  COMMAND_LISTENING: "command_listening",
+  PROCESSING: "processing",
+  SPEAKING: "speaking",
+  COOLDOWN: "cooldown",
+  ERROR: "error",
+};
+const HANDS_FREE_RECONNECT_DELAYS_MS = [1000, 2000, 5000];
+const HANDS_FREE_STORAGE_KEY = "hammerJarvisHandsFreeWanted";
+const DESKTOP_EVENT_RECONNECT_DELAYS_MS = [1000, 2000, 5000];
 let speechOutputEnabled = true;
 let isListening = false;
+let isAssistantSpeaking = false;
+let commandRecognitionRunId = 0;
+let currentCommandRecognition = null;
 let dashboardRefreshInFlight = false;
 let lastEntityCatalogRefresh = 0;
 let speechVoices = [];
@@ -46,6 +63,31 @@ let voiceLoadElapsedTimer = null;
 let voiceLoadInProgress = false;
 let voiceLoadDiagnosticsLogged = false;
 let dashboardInitialized = false;
+let handsFreeState = HANDS_FREE_STATES.DISABLED;
+let handsFreeWanted = false;
+let handsFreeAudioContext = null;
+let handsFreeMediaStream = null;
+let handsFreeSource = null;
+let handsFreeWorklet = null;
+let handsFreeSocket = null;
+let handsFreeStreamingPaused = true;
+let handsFreeReconnectAttempt = 0;
+let handsFreeReconnectTimer = null;
+let handsFreeResumeTimer = null;
+let handsFreeCommandTimer = null;
+let handsFreeConfig = {
+  enabled: false,
+  installed: false,
+  model_available: false,
+  sample_rate: 16000,
+  frame_ms: 80,
+  command_timeout_ms: 8000,
+};
+let desktopEventSocket = null;
+let desktopEventReconnectAttempt = 0;
+let desktopEventReconnectTimer = null;
+let desktopEventHeartbeatTimer = null;
+let desktopAgentState = "Nicht verbunden";
 
 const elements = {};
 const activities = new Map();
@@ -102,6 +144,14 @@ function bindElements() {
     "voiceCard",
     "voiceButton",
     "chatMicButton",
+    "handsFreeToggle",
+    "handsFreeChatToggle",
+    "handsFreeStatus",
+    "handsFreeDetails",
+    "desktopAgentStatus",
+    "desktopWakeWord",
+    "desktopWakeEngine",
+    "desktopReconnectButton",
     "voiceStatus",
     "ecoflowSummary",
     "ecoflowOverall",
@@ -834,6 +884,7 @@ async function sendChatMessage(textValue) {
   setText("recognizedCommand", message);
   setText("jarvisAnswer", "Jarvis denkt...");
   setVoiceStatus("Befehl wird gesendet.");
+  setDesktopAgentState("Jarvis denkt", "Jarvis verarbeitet den Befehl.");
   addChatMessage("user", message);
 
   try {
@@ -852,6 +903,8 @@ async function sendChatMessage(textValue) {
         setText("jarvisAnswer", errorText);
         setVoiceStatus(errorText, "error");
         addChatMessage("assistant", errorText);
+        setDesktopAgentState("Fehler", errorText);
+        scheduleHandsFreeResume();
         return;
       }
       updateActivity(chatActivityId, { detail: "Legacy-Home-Assistant-Endpunkt wird genutzt." });
@@ -869,6 +922,9 @@ async function sendChatMessage(textValue) {
     addChatMessage("assistant", answer);
     if (speechOutputEnabled) {
       speakAnswer(answer);
+    } else {
+      setDesktopAgentState("Bereit", "Desktop-Agent bereit.");
+      scheduleHandsFreeResume();
     }
     finishActivity(chatActivityId, "Antwort empfangen.");
   } catch (error) {
@@ -881,28 +937,38 @@ async function sendChatMessage(textValue) {
     setText("jarvisAnswer", errorText);
     setVoiceStatus(errorText, "error");
     addChatMessage("assistant", errorText);
+    setDesktopAgentState("Fehler", errorText);
+    scheduleHandsFreeResume();
   }
 }
 
 function speakAnswer(answer) {
   if (!("speechSynthesis" in window)) {
     setVoiceStatus("Sprachausgabe wird von diesem Browser nicht unterstützt.", "error");
+    scheduleHandsFreeResume();
     return;
   }
   cancelSpeechOutput(false);
   if (!speechOutputEnabled) {
+    scheduleHandsFreeResume();
     return;
   }
   const preparedText = prepareSpeechText(answer);
   if (!preparedText) {
     setVoiceStatus("Keine verwertbare Textausgabe für die Sprachausgabe.", "error");
+    scheduleHandsFreeResume();
     return;
   }
   const chunks = splitSpeechText(preparedText);
   if (chunks.length === 0) {
     setVoiceStatus("Keine verwertbare Textausgabe für die Sprachausgabe.", "error");
+    scheduleHandsFreeResume();
     return;
   }
+  pauseWakeStreaming();
+  isAssistantSpeaking = true;
+  setDesktopAgentState("Jarvis spricht", "Jarvis spricht.");
+  setHandsFreeState(HANDS_FREE_STATES.SPEAKING, "Jarvis spricht. Weckwort-Erkennung pausiert.");
   const runId = ++speechRunId;
   if (speechActivityId && activities.has(speechActivityId)) {
     cancelActivity(speechActivityId, "Neue Sprachausgabe gestartet.");
@@ -966,6 +1032,9 @@ function speakSpeechChunkQueue(chunks, runId, totalChunks = chunks.length) {
       return;
     }
     setVoiceStatus("Sprachsteuerung bereit.");
+    isAssistantSpeaking = false;
+    setDesktopAgentState("Cooldown", "Jarvis hat geantwortet. Kurzer Cooldown.");
+    scheduleHandsFreeResume();
     if (speechActivityId && activities.has(speechActivityId)) {
       finishActivity(speechActivityId, "Sprachausgabe abgeschlossen.");
     }
@@ -975,7 +1044,10 @@ function speakSpeechChunkQueue(chunks, runId, totalChunks = chunks.length) {
       return;
     }
     const reason = event?.error ? ` (${event.error})` : "";
+    isAssistantSpeaking = false;
+    setDesktopAgentState("Fehler", `Sprachausgabe fehlgeschlagen${reason}.`);
     setVoiceStatus(`Sprachausgabe fehlgeschlagen${reason}.`, "error");
+    scheduleHandsFreeResume();
     if (speechActivityId && activities.has(speechActivityId)) {
       failActivity(speechActivityId, `Sprachausgabe fehlgeschlagen${reason}.`);
     }
@@ -984,7 +1056,10 @@ function speakSpeechChunkQueue(chunks, runId, totalChunks = chunks.length) {
     window.speechSynthesis.speak(utterance);
   } catch (error) {
     if (runId === speechRunId) {
+      isAssistantSpeaking = false;
+      setDesktopAgentState("Fehler", "Sprachausgabe konnte nicht gestartet werden.");
       setVoiceStatus("Sprachausgabe konnte nicht gestartet werden.", "error");
+      scheduleHandsFreeResume();
       if (speechActivityId && activities.has(speechActivityId)) {
         failActivity(speechActivityId, "Sprachausgabe konnte nicht gestartet werden.");
       }
@@ -1528,49 +1603,550 @@ function reloadSpeechVoices() {
   }
 }
 
-function startVoiceRecognition() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    setVoiceStatus("Sprachsteuerung nicht unterstützt.", "error");
+function setHandsFreeState(state, message = "") {
+  handsFreeState = state;
+  const active = ![HANDS_FREE_STATES.DISABLED, HANDS_FREE_STATES.ERROR].includes(state);
+  const wakeDetected = state === HANDS_FREE_STATES.WAKE_DETECTED || state === HANDS_FREE_STATES.COMMAND_LISTENING;
+  elements.voiceCard?.classList.toggle("hands-free-armed", state === HANDS_FREE_STATES.ARMED);
+  elements.voiceCard?.classList.toggle("wake-detected", wakeDetected);
+  elements.handsFreeToggle?.classList.toggle("active", active);
+  elements.handsFreeToggle?.classList.toggle("wake-detected", wakeDetected);
+  elements.handsFreeChatToggle?.classList.toggle("active", active);
+  elements.handsFreeChatToggle?.classList.toggle("wake-detected", wakeDetected);
+  elements.handsFreeToggle && (elements.handsFreeToggle.textContent = active ? "Browser-Fallback: Ein" : "Browser-Fallback: Aus");
+  elements.handsFreeChatToggle && (elements.handsFreeChatToggle.textContent = active ? "Browser-Fallback: Ein" : "Browser-Fallback: Aus");
+  const panel = elements.handsFreeDetails?.closest(".hands-free-panel");
+  panel?.classList.toggle("active", active);
+  panel?.classList.toggle("error", state === HANDS_FREE_STATES.ERROR);
+  if (message) {
+    setText("handsFreeStatus", message);
+    setText("handsFreeDetails", message);
+  }
+}
+
+async function refreshWakeWordStatus() {
+  const status = await fetchJson("/assistant/voice/wake/status", { timeoutMs: 6000 });
+  handsFreeConfig = { ...handsFreeConfig, ...status };
+  return status;
+}
+
+async function toggleHandsFreeMode() {
+  if (handsFreeWanted) {
+    stopHandsFreeMode("Freihändiger Modus ausgeschaltet.");
     return;
   }
-  if (isListening) {
+  await startHandsFreeMode();
+}
+
+async function startHandsFreeMode() {
+  if (handsFreeWanted || handsFreeState === HANDS_FREE_STATES.STARTING) {
+    return;
+  }
+  handsFreeWanted = true;
+  storeHandsFreeWanted(true);
+  setHandsFreeState(HANDS_FREE_STATES.STARTING, "Lokale Weckwort-Erkennung wird gestartet.");
+  startActivity("hands-free", "Freihändige Sprachsteuerung wird gestartet", {
+    detail: "Status und Mikrofon werden geprüft",
+    category: "voice",
+    timeoutMs: 20000,
+  });
+  try {
+    const status = await refreshWakeWordStatus();
+    if (!status.enabled) {
+      throw new Error("Wake Word ist nicht aktiviert. Setze WAKE_WORD_ENABLED=true in .env.");
+    }
+    if (!status.installed || !status.model_available) {
+      throw new Error("openWakeWord ist nicht installiert oder das Modell ist nicht verfügbar. Führe .\\scripts\\setup-wake-word.ps1 aus.");
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Mikrofonzugriff wird von diesem Browser nicht unterstützt.");
+    }
+    await startWakeAudioPipeline();
+    await openWakeWordSocket();
+    setHandsFreeState(HANDS_FREE_STATES.ARMED, "Browser-Fallback aktiv. Das konfigurierte openWakeWord-Modell lauscht lokal.");
+    finishActivity("hands-free", "Freihändiger Modus aktiv.");
+  } catch (error) {
+    stopHandsFreeMode(error.message || "Freihändiger Modus konnte nicht gestartet werden.", true);
+    failActivity("hands-free", error.message || "Freihändiger Modus konnte nicht gestartet werden.");
+  }
+}
+
+function stopHandsFreeMode(message = "Freihändiger Modus ausgeschaltet.", isError = false) {
+  handsFreeWanted = false;
+  storeHandsFreeWanted(false);
+  clearHandsFreeTimers();
+  closeWakeWordSocket();
+  stopWakeAudioPipeline();
+  setHandsFreeState(isError ? HANDS_FREE_STATES.ERROR : HANDS_FREE_STATES.DISABLED, message);
+  if (!isError && activities.has("hands-free")) {
+    cancelActivity("hands-free", message);
+  }
+}
+
+async function startWakeAudioPipeline() {
+  handsFreeMediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1,
+    },
+  });
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) {
+    throw new Error("Web Audio API wird von diesem Browser nicht unterstützt.");
+  }
+  handsFreeAudioContext = new AudioContextCtor();
+  if (handsFreeAudioContext.state === "suspended") {
+    await handsFreeAudioContext.resume();
+  }
+  const frameSize = Math.round((handsFreeConfig.sample_rate || 16000) * (handsFreeConfig.frame_ms || 80) / 1000);
+  await handsFreeAudioContext.audioWorklet.addModule(`/static/audio/wake-word-processor.js?v=${DASHBOARD_BUILD}`);
+  handsFreeWorklet = new AudioWorkletNode(handsFreeAudioContext, "wake-word-processor", {
+    processorOptions: {
+      targetSampleRate: handsFreeConfig.sample_rate || 16000,
+      frameSize,
+    },
+  });
+  handsFreeWorklet.port.onmessage = (event) => {
+    if (!handsFreeWanted || handsFreeStreamingPaused || handsFreeState !== HANDS_FREE_STATES.ARMED) {
+      return;
+    }
+    if (handsFreeSocket?.readyState === WebSocket.OPEN && event.data?.type === "pcm_frame") {
+      handsFreeSocket.send(event.data.frame);
+    }
+  };
+  handsFreeSource = handsFreeAudioContext.createMediaStreamSource(handsFreeMediaStream);
+  handsFreeSource.connect(handsFreeWorklet);
+  handsFreeStreamingPaused = false;
+}
+
+function stopWakeAudioPipeline() {
+  handsFreeStreamingPaused = true;
+  try {
+    handsFreeSource?.disconnect();
+    handsFreeWorklet?.disconnect();
+  } catch (error) {
+    // Disconnect can throw if nodes were never connected.
+  }
+  handsFreeSource = null;
+  handsFreeWorklet = null;
+  if (handsFreeMediaStream) {
+    for (const track of handsFreeMediaStream.getTracks()) {
+      track.stop();
+    }
+  }
+  handsFreeMediaStream = null;
+  if (handsFreeAudioContext) {
+    handsFreeAudioContext.close().catch(() => {});
+  }
+  handsFreeAudioContext = null;
+}
+
+function openWakeWordSocket() {
+  return new Promise((resolve, reject) => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const url = `${protocol}//${window.location.host}/assistant/voice/wake/stream`;
+    handsFreeSocket = new WebSocket(url);
+    handsFreeSocket.binaryType = "arraybuffer";
+    let resolved = false;
+    const startupTimer = window.setTimeout(() => {
+      if (!resolved) {
+        reject(new Error("Verbindung zur lokalen Weckwort-Erkennung wurde nicht rechtzeitig geöffnet."));
+      }
+    }, 6000);
+    handsFreeSocket.onopen = () => {
+      handsFreeReconnectAttempt = 0;
+      updateActivity("hands-free", { detail: "WebSocket verbunden" });
+    };
+    handsFreeSocket.onmessage = (event) => {
+      const payload = parseWakeWordMessage(event.data);
+      if (!payload) {
+        return;
+      }
+      if (payload.type === "ready" && !resolved) {
+        window.clearTimeout(startupTimer);
+        resolved = true;
+        resolve();
+        return;
+      }
+      handleWakeWordEvent(payload);
+    };
+    handsFreeSocket.onerror = () => {
+      if (!resolved) {
+        window.clearTimeout(startupTimer);
+        reject(new Error("Verbindung zur lokalen Weckwort-Erkennung fehlgeschlagen."));
+      }
+    };
+    handsFreeSocket.onclose = () => {
+      window.clearTimeout(startupTimer);
+      if (handsFreeWanted) {
+        scheduleWakeWordReconnect();
+      }
+    };
+  });
+}
+
+function closeWakeWordSocket() {
+  if (handsFreeSocket) {
+    handsFreeSocket.onclose = null;
+    handsFreeSocket.close();
+  }
+  handsFreeSocket = null;
+}
+
+function parseWakeWordMessage(value) {
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return null;
+  }
+}
+
+function handleWakeWordEvent(payload) {
+  if (payload.type === "wake_detected") {
+    pauseWakeStreaming();
+    setHandsFreeState(HANDS_FREE_STATES.WAKE_DETECTED, "Browser-Fallback hat ein Wake-Ereignis erkannt. Ich höre den nächsten Befehl.");
+    playWakeBeep();
+    startHandsFreeCommandRecognition();
+    return;
+  }
+  if (payload.type === "error") {
+    const message = payload.message || "Wake-Word-Erkennung meldet einen Fehler.";
+    setHandsFreeState(HANDS_FREE_STATES.ERROR, message);
+    return;
+  }
+  if (payload.type === "status" && handsFreeState === HANDS_FREE_STATES.ARMED) {
+    setText("handsFreeStatus", "Browser-Fallback aktiv.");
+  }
+}
+
+function pauseWakeStreaming() {
+  handsFreeStreamingPaused = true;
+}
+
+function resumeWakeStreaming() {
+  if (!handsFreeWanted || isListening) {
+    return;
+  }
+  handsFreeStreamingPaused = false;
+  setHandsFreeState(HANDS_FREE_STATES.ARMED, "Browser-Fallback aktiv.");
+}
+
+function scheduleHandsFreeResume(delayMs = handsFreeConfig.cooldown_ms || 1800) {
+  if (!handsFreeWanted) {
+    return;
+  }
+  clearTimeout(handsFreeResumeTimer);
+  setHandsFreeState(HANDS_FREE_STATES.COOLDOWN, "Kurze Pause, dann wird der Browser-Fallback wieder aktiv.");
+  handsFreeResumeTimer = window.setTimeout(() => resumeWakeStreaming(), delayMs);
+}
+
+function clearHandsFreeTimers() {
+  clearTimeout(handsFreeReconnectTimer);
+  clearTimeout(handsFreeResumeTimer);
+  clearTimeout(handsFreeCommandTimer);
+  handsFreeReconnectTimer = null;
+  handsFreeResumeTimer = null;
+  handsFreeCommandTimer = null;
+}
+
+function scheduleWakeWordReconnect() {
+  const delay = HANDS_FREE_RECONNECT_DELAYS_MS[Math.min(handsFreeReconnectAttempt, HANDS_FREE_RECONNECT_DELAYS_MS.length - 1)];
+  handsFreeReconnectAttempt += 1;
+  setHandsFreeState(HANDS_FREE_STATES.STARTING, `Verbindung zur lokalen Weckwort-Erkennung wird neu aufgebaut (${delay / 1000}s).`);
+  handsFreeReconnectTimer = window.setTimeout(async () => {
+    if (!handsFreeWanted) {
+      return;
+    }
+    try {
+      await openWakeWordSocket();
+      resumeWakeStreaming();
+    } catch (error) {
+      if (handsFreeReconnectAttempt >= HANDS_FREE_RECONNECT_DELAYS_MS.length) {
+        stopHandsFreeMode("Verbindung zur lokalen Weckwort-Erkennung konnte nicht wiederhergestellt werden.", true);
+      }
+    }
+  }, delay);
+}
+
+function startHandsFreeCommandRecognition() {
+  setHandsFreeState(HANDS_FREE_STATES.COMMAND_LISTENING, "Ich höre den Befehl.");
+  startCommandRecognition({
+    source: "desktop_agent",
+    autoSend: true,
+    timeoutMs: handsFreeConfig.command_timeout_ms || 9000,
+    initialPrompt: "Jarvis wurde aktiviert. Ich höre zu...",
+  });
+}
+
+function cleanHandsFreeCommand(value) {
+  return text(value, "").replace(/^\s*(hey\s+)?jarvis[:,\-\s]*/i, "").trim() || value;
+}
+
+function playWakeBeep() {
+  try {
+    const context = handsFreeAudioContext || new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.08, context.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.16);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.18);
+  } catch (error) {
+    // Audio feedback is optional.
+  }
+}
+
+function storeHandsFreeWanted(value) {
+  try {
+    localStorage.setItem(HANDS_FREE_STORAGE_KEY, value ? "true" : "false");
+  } catch (error) {
+    // Hands-free mode still works without persistent preference.
+  }
+}
+
+function initializeHandsFreeStatus() {
+  refreshWakeWordStatus()
+    .then((status) => {
+      const configured = status.enabled && status.installed && status.model_available;
+      setText("handsFreeStatus", configured ? "Browser-Fallback verfügbar." : "Desktop-Agent: Nicht verbunden. Browser-Fallback optional.");
+    })
+    .catch(() => {
+      setText("handsFreeStatus", "Wake-Word-Status konnte nicht geladen werden.");
+    });
+}
+
+function setDesktopAgentState(state, detail = "") {
+  desktopAgentState = state || desktopAgentState;
+  setText("desktopAgentStatus", desktopAgentState);
+  if (detail) {
+    setText("handsFreeStatus", detail);
+  }
+}
+
+function connectDesktopEventBridge() {
+  clearTimeout(desktopEventReconnectTimer);
+  if (desktopEventSocket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(desktopEventSocket.readyState)) {
+    return;
+  }
+  setDesktopAgentState("Verbindung wird hergestellt", "Desktop-Agent-Verbindung wird hergestellt.");
+  desktopEventSocket = new WebSocket(buildDesktopEventSocketUrl());
+  desktopEventSocket.onopen = () => {
+    desktopEventReconnectAttempt = 0;
+    setDesktopAgentState("Bereit", "Desktop-Agent-Eventbrücke verbunden.");
+    startDesktopHeartbeat();
+  };
+  desktopEventSocket.onmessage = (event) => {
+    const payload = parseWakeWordMessage(event.data);
+    if (!payload) {
+      return;
+    }
+    handleDesktopEvent(payload);
+  };
+  desktopEventSocket.onerror = () => {
+    setDesktopAgentState("Fehler", "Desktop-Agent-Verbindung meldet einen Fehler.");
+  };
+  desktopEventSocket.onclose = () => {
+    stopDesktopHeartbeat();
+    if (desktopEventReconnectAttempt >= DESKTOP_EVENT_RECONNECT_DELAYS_MS.length) {
+      setDesktopAgentState("Fehler", "Desktop-Agent nicht verbunden. Manuelle Sprachtaste bleibt verfügbar.");
+      return;
+    }
+    const delay = DESKTOP_EVENT_RECONNECT_DELAYS_MS[desktopEventReconnectAttempt];
+    desktopEventReconnectAttempt += 1;
+    setDesktopAgentState("Verbindung wird hergestellt", `Desktop-Agent-Reconnect in ${delay / 1000}s.`);
+    desktopEventReconnectTimer = window.setTimeout(connectDesktopEventBridge, delay);
+  };
+}
+
+function buildDesktopEventSocketUrl(locationSource = window.location) {
+  const protocol = locationSource.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${locationSource.host}/assistant/desktop/events`;
+}
+
+function startDesktopHeartbeat() {
+  stopDesktopHeartbeat();
+  desktopEventHeartbeatTimer = window.setInterval(() => {
+    if (desktopEventSocket?.readyState === WebSocket.OPEN) {
+      desktopEventSocket.send(JSON.stringify({ type: "heartbeat" }));
+    }
+  }, 15000);
+}
+
+function stopDesktopHeartbeat() {
+  clearInterval(desktopEventHeartbeatTimer);
+  desktopEventHeartbeatTimer = null;
+}
+
+function handleDesktopEvent(payload) {
+  if (payload.type === "desktop_status") {
+    setText("desktopWakeWord", payload.wake_word || "Jarvis");
+    setText("desktopWakeEngine", formatDesktopWakeEngine(payload.wake_engine, payload.agent_state));
+    setDesktopAgentState(payload.agent_connected ? "Bereit" : "Nicht verbunden");
+    return;
+  }
+  if (payload.type !== "wake_detected") {
+    return;
+  }
+  if (payload.wake_word !== "Jarvis") {
+    setDesktopAgentState("Fehler", "Wake-Ereignis mit unerwartetem Wake Word ignoriert.");
+    return;
+  }
+  if (isListening || isAssistantSpeaking || [
+    HANDS_FREE_STATES.COMMAND_LISTENING,
+    HANDS_FREE_STATES.PROCESSING,
+    HANDS_FREE_STATES.SPEAKING,
+  ].includes(handsFreeState)) {
+    setDesktopAgentState("Cooldown", "Wake-Ereignis ignoriert, weil Jarvis bereits beschäftigt ist.");
+    return;
+  }
+  setDesktopAgentState("Jarvis erkannt", "Jarvis wurde aktiviert.");
+  playWakeBeep();
+  startCommandRecognition({
+    source: "desktop_agent",
+    autoSend: true,
+    timeoutMs: handsFreeConfig.command_timeout_ms || 9000,
+    initialPrompt: "Jarvis wurde aktiviert. Ich höre zu...",
+  });
+}
+
+function formatDesktopWakeEngine(engine, state) {
+  if (engine === "windows_speech") {
+    return "Windows Speech";
+  }
+  if (engine === "openwakeword_custom") {
+    return "openWakeWord Custom";
+  }
+  return state || "Unbekannt";
+}
+
+function scheduleDesktopCooldown(state = "Cooldown") {
+  setDesktopAgentState(state, "Kurzer Cooldown nach der Spracherkennung.");
+  window.setTimeout(() => {
+    if (desktopEventSocket?.readyState === WebSocket.OPEN) {
+      setDesktopAgentState("Bereit", "Desktop-Agent bereit.");
+    }
+  }, 1200);
+}
+
+function cleanupHandsFreeOnUnload() {
+  stopDesktopHeartbeat();
+  clearTimeout(desktopEventReconnectTimer);
+  if (desktopEventSocket) {
+    desktopEventSocket.close();
+    desktopEventSocket = null;
+  }
+  stopHandsFreeMode("Dashboard wird geschlossen.");
+}
+
+function startCommandRecognition(options = {}) {
+  const config = {
+    source: options.source || "button",
+    autoSend: options.autoSend !== false,
+    timeoutMs: options.timeoutMs || 9000,
+    initialPrompt: options.initialPrompt || "Ich höre zu...",
+  };
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    setVoiceStatus("Spracherkennung wird von diesem Browser nicht unterstützt. Bitte Chrome oder Edge verwenden.", "error");
+    setDesktopAgentState("Fehler", "Browser-Spracherkennung nicht verfügbar.");
+    enableSpeechButtons();
+    return;
+  }
+  if (isListening || currentCommandRecognition) {
+    setVoiceStatus("Spracherkennung läuft bereits.");
+    return;
+  }
+  if (isAssistantSpeaking) {
+    setVoiceStatus("Jarvis spricht gerade. Bitte warte kurz.", "speaking");
     return;
   }
 
   let recognitionHadResult = false;
-  recognitionActivityId = "speech-recognition";
+  let completed = false;
+  const runId = ++commandRecognitionRunId;
+  recognitionActivityId = `speech-recognition-${runId}`;
   startActivity(recognitionActivityId, "Spracherkennung läuft", {
-    detail: "Mikrofon wird gestartet",
+    detail: config.source === "desktop_agent" ? "Desktop-Agent hat Jarvis erkannt." : "Mikrofon wird gestartet",
     category: "voice",
+    timeoutMs: config.timeoutMs + 3000,
   });
   const recognition = new SpeechRecognition();
+  currentCommandRecognition = recognition;
   recognition.lang = "de-DE";
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
+  const timeoutHandle = window.setTimeout(() => {
+    if (runId !== commandRecognitionRunId || completed) {
+      return;
+    }
+    try {
+      recognition.abort();
+    } catch (error) {
+      // The browser may already have ended the recognizer.
+    }
+    setVoiceStatus("Keine Sprache erkannt. Bitte erneut versuchen.", "error");
+    timeoutActivity(recognitionActivityId, "Keine Sprache erkannt.");
+  }, config.timeoutMs);
   recognition.onstart = () => {
+    if (runId !== commandRecognitionRunId) {
+      try {
+        recognition.abort();
+      } catch (error) {
+        // Ignore stale recognizer abort errors.
+      }
+      return;
+    }
     isListening = true;
+    disableSpeechButtons();
     elements.voiceCard.classList.add("listening");
     elements.voiceButton.classList.add("listening");
-    setVoiceStatus("Ich höre zu...", "active");
+    setVoiceStatus(config.initialPrompt, "active");
+    setDesktopAgentState(config.source === "desktop_agent" ? "Browser-Spracherkennung aktiv" : desktopAgentState);
     updateActivity(recognitionActivityId, { detail: "Mikrofon aktiv. Bitte sprechen." });
   };
   recognition.onresult = (event) => {
+    if (runId !== commandRecognitionRunId) {
+      return;
+    }
     recognitionHadResult = true;
+    completed = true;
     const transcript = event.results?.[0]?.[0]?.transcript || "";
     elements.commandInput.value = transcript;
     setText("recognizedCommand", transcript || "-");
     finishActivity(recognitionActivityId, transcript ? `Erkannt: ${transcript}` : "Kein Text erkannt.");
-    if (transcript) {
+    if (transcript && config.autoSend) {
       sendChatMessage(transcript);
     }
   };
   recognition.onerror = (event) => {
-    setVoiceStatus(`Spracherkennung fehlgeschlagen: ${event.error}`, "error");
-    failActivity(recognitionActivityId, `Spracherkennung fehlgeschlagen: ${event.error}`);
+    if (runId !== commandRecognitionRunId) {
+      return;
+    }
+    const message = speechRecognitionErrorMessage(event.error);
+    setVoiceStatus(message, event.error === "aborted" ? "" : "error");
+    if (event.error === "no-speech") {
+      timeoutActivity(recognitionActivityId, message);
+    } else if (event.error === "aborted") {
+      cancelActivity(recognitionActivityId, message);
+    } else {
+      failActivity(recognitionActivityId, message);
+    }
   };
   recognition.onend = () => {
+    if (runId !== commandRecognitionRunId) {
+      return;
+    }
+    window.clearTimeout(timeoutHandle);
     isListening = false;
+    currentCommandRecognition = null;
+    enableSpeechButtons();
     elements.voiceCard.classList.remove("listening");
     elements.voiceButton.classList.remove("listening");
     if (!recognitionHadResult && recognitionActivityId && activities.has(recognitionActivityId)) {
@@ -1579,12 +2155,59 @@ function startVoiceRecognition() {
     if (!elements.voiceStatus.classList.contains("error")) {
       setVoiceStatus("Sprachsteuerung bereit.");
     }
+    if (config.source === "desktop_agent" && !recognitionHadResult) {
+      scheduleDesktopCooldown("Cooldown");
+    }
   };
   try {
     recognition.start();
   } catch (error) {
+    window.clearTimeout(timeoutHandle);
+    currentCommandRecognition = null;
+    enableSpeechButtons();
     failActivity(recognitionActivityId, "Spracherkennung konnte nicht gestartet werden.");
     setVoiceStatus("Spracherkennung konnte nicht gestartet werden.", "error");
+  }
+}
+
+function startVoiceRecognition() {
+  return startCommandRecognition({ source: "button", autoSend: true });
+}
+
+function speechRecognitionErrorMessage(errorCode) {
+  if (errorCode === "no-speech") {
+    return "Keine Sprache erkannt. Bitte erneut versuchen.";
+  }
+  if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {
+    return "Mikrofonzugriff wurde verweigert. Bitte erlaube den Mikrofonzugriff im Browser.";
+  }
+  if (errorCode === "network") {
+    return "Browser-Spracherkennung ist aktuell nicht verfügbar.";
+  }
+  if (errorCode === "aborted") {
+    return "Spracherkennung wurde abgebrochen.";
+  }
+  if (errorCode === "audio-capture") {
+    return "Kein Mikrofon verfügbar oder Mikrofon wird bereits verwendet.";
+  }
+  return `Spracherkennung fehlgeschlagen: ${errorCode || "unbekannter Fehler"}`;
+}
+
+function disableSpeechButtons() {
+  for (const button of [elements.voiceButton, elements.chatMicButton]) {
+    if (button) {
+      button.disabled = true;
+      button.classList.add("button-loading");
+    }
+  }
+}
+
+function enableSpeechButtons() {
+  for (const button of [elements.voiceButton, elements.chatMicButton]) {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("button-loading");
+    }
   }
 }
 
@@ -2087,8 +2710,14 @@ function wireDashboardEvents() {
       sendChatMessage(elements.commandInput.value);
     }
   });
-  elements.voiceButton.addEventListener("click", () => withButtonLoading(elements.voiceButton, "Hört zu...", startVoiceRecognition));
-  elements.chatMicButton.addEventListener("click", () => withButtonLoading(elements.chatMicButton, "Hört zu...", startVoiceRecognition));
+  elements.voiceButton.addEventListener("click", () => startCommandRecognition({ source: "button", autoSend: true }));
+  elements.chatMicButton.addEventListener("click", () => startCommandRecognition({ source: "button", autoSend: true }));
+  elements.handsFreeToggle?.addEventListener("click", toggleHandsFreeMode);
+  elements.handsFreeChatToggle?.addEventListener("click", toggleHandsFreeMode);
+  elements.desktopReconnectButton?.addEventListener("click", () => {
+    desktopEventReconnectAttempt = 0;
+    connectDesktopEventBridge();
+  });
   elements.clearActivities.addEventListener("click", () => {
     recentActivities.length = 0;
     renderActivities();
@@ -2227,6 +2856,8 @@ function initializeSpeechRecognitionAvailability() {
 function initializeRemainingDashboardSafely() {
   try {
     initializeSpeechRecognitionAvailability();
+    initializeHandsFreeStatus();
+    connectDesktopEventBridge();
     updateClock();
     refreshDashboard();
     window.setInterval(updateClock, 1000);
@@ -2239,6 +2870,8 @@ function initializeRemainingDashboardSafely() {
 function initDashboard() {
   bindElements();
   wireEvents();
+  window.addEventListener("pagehide", cleanupHandsFreeOnUnload);
+  window.addEventListener("beforeunload", cleanupHandsFreeOnUnload);
   initializeVoiceSubsystemSafely();
   initializeRemainingDashboardSafely();
 }
@@ -2267,3 +2900,7 @@ if (document.readyState === "loading") {
 } else {
   bootstrapDashboard();
 }
+
+window.HammerJarvisDashboard = {
+  buildDesktopEventSocketUrl,
+};
