@@ -396,6 +396,7 @@ h1 {
     "home core energy"
     "mail chat calendar"
     "files chat protool"
+    "files chat engineering"
     "files chat research"
     "alerts chat research"
     "performance chat research"
@@ -455,6 +456,7 @@ h1 {
 .calendar-panel { grid-area: calendar; }
 .files-panel { grid-area: files; }
 .protool-panel { grid-area: protool; }
+.engineering-panel { grid-area: engineering; }
 .research-panel { grid-area: research; }
 .alerts-panel { grid-area: alerts; }
 .skills-panel { grid-area: skills; }
@@ -466,6 +468,71 @@ h1 {
 #knowledge { grid-area: knowledge; }
 #actions { grid-area: actions; }
 .chat-panel { grid-area: chat; }
+
+.engineering-workspace {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.9fr) minmax(220px, 1.4fr) minmax(150px, 0.8fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.engineering-explorer,
+.engineering-main,
+.engineering-properties {
+  min-width: 0;
+  border: 1px solid rgba(0, 229, 255, 0.18);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(0, 229, 255, 0.045);
+}
+
+.engineering-explorer h2,
+.engineering-main h2,
+.engineering-properties h2 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.engineering-tree,
+.engineering-tree ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.engineering-tree {
+  padding-left: 0;
+  list-style: none;
+}
+
+.engineering-tree li {
+  margin: 6px 0;
+}
+
+.engineering-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.engineering-tabs button {
+  border: 1px solid rgba(0, 229, 255, 0.28);
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: rgba(0, 229, 255, 0.08);
+  color: var(--text);
+}
+
+.engineering-properties dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 10px;
+  margin: 0;
+}
+
+.engineering-properties dt {
+  color: var(--muted);
+}
 
 .protool-summary {
   display: grid;
@@ -1307,6 +1374,7 @@ select:focus {
       "mail chat"
       "calendar research"
       "files protool"
+      "files engineering"
       "alerts research"
       "performance skills"
       "smart-home-actions smart-home-auto-policy"
@@ -1316,6 +1384,10 @@ select:focus {
 
   .core-stage {
     min-height: 420px;
+  }
+
+  .engineering-workspace {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1345,6 +1417,7 @@ select:focus {
       "calendar"
       "files"
       "protool"
+      "engineering"
       "research"
       "alerts"
       "performance"

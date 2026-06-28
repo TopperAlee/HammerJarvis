@@ -1,4 +1,4 @@
-const DASHBOARD_BUILD = "protool-upload-20260628";
+const DASHBOARD_BUILD = "engineering-workspace-20260628";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
 const fetchTimeoutMs = 15000;
@@ -255,6 +255,8 @@ function bindElements() {
     "protoolNoIssues",
     "protoolIssuesBody",
     "protoolFileReports",
+    "engineeringModules",
+    "engineeringProjectExplorer",
     "refreshActions",
     "pendingActions",
     "runWatchers",

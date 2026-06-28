@@ -57,6 +57,8 @@ from app.tools.productivity.email_service import EmailService
 from app.tools.productivity.providers.gmail_provider import GmailProvider
 from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
 from app.tools.web.web_research_tool import WebResearchTool, get_web_research_status
+from hammer_jarvis.engineering.demo import get_demo_projects
+from hammer_jarvis.engineering.plugins import get_engineering_modules
 from hammer_jarvis.tools.protool.report import analyze_protool_csv
 
 
@@ -920,6 +922,16 @@ def assistant_file_open(request: FileOpenRequest) -> dict[str, Any]:
 @app.post("/assistant/files/open-latest")
 def assistant_file_open_latest() -> dict[str, Any]:
     return FileOpenTool().open_latest_export()
+
+
+@app.get("/assistant/engineering/modules")
+def assistant_engineering_modules() -> list[dict[str, str]]:
+    return get_engineering_modules()
+
+
+@app.get("/assistant/engineering/projects")
+def assistant_engineering_projects() -> list[dict[str, Any]]:
+    return get_demo_projects()
 
 
 @app.post("/assistant/protool/analyze")

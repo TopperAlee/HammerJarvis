@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
-    <link rel="stylesheet" href="/static/dashboard.css?v=protool-upload-20260628">
+    <link rel="stylesheet" href="/static/dashboard.css?v=engineering-workspace-20260628">
   </head>
   <body>
     <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
@@ -28,6 +28,7 @@
           <a href="#alerts">△ Alerts</a>
           <a href="#actions">✓ Aktionen</a>
           <a href="#chat">● Chat</a>
+          <a href="#engineering">Engineering</a>
           <a href="#protool">ProTool Assistant</a>
         </nav>
         <div class="sidebar-stats">
@@ -262,6 +263,64 @@
             <div id="protoolFileReports" class="protool-file-reports"></div>
           </section>
 
+          <section id="engineering" class="hud-panel engineering-panel">
+            <div class="panel-heading">
+              <span>Engineering</span>
+              <span id="engineeringModules" class="muted">Module: ProTool, WinCC flexible, TIA, STEP7</span>
+            </div>
+            <div class="engineering-workspace">
+              <aside class="engineering-explorer" aria-label="Project Explorer">
+                <h2>Project Explorer</h2>
+                <ul id="engineeringProjectExplorer" class="engineering-tree">
+                  <li>
+                    <span>Engineering</span>
+                    <ul>
+                      <li>
+                        <span>Projekte</span>
+                        <ul>
+                          <li>
+                            <span>Beispielprojekt</span>
+                            <ul>
+                              <li>MessageText.csv</li>
+                              <li>AlarmText.csv</li>
+                              <li>Variables.csv</li>
+                              <li>HelpText.csv</li>
+                              <li>Recipes.csv</li>
+                            </ul>
+                          </li>
+                        </ul>
+                      </li>
+                    </ul>
+                  </li>
+                </ul>
+              </aside>
+              <div class="engineering-main" aria-label="Engineering Arbeitsbereich">
+                <div class="engineering-tabs" aria-label="Engineering Bereiche">
+                  <button type="button">Projekte</button>
+                  <button type="button">HMI</button>
+                  <button type="button">PLC</button>
+                  <button type="button">Übersetzung</button>
+                  <button type="button">Dokumentation</button>
+                </div>
+                <div class="engineering-placeholder">
+                  <h2>Arbeitsbereich</h2>
+                  <p class="muted">Gemeinsame Plattform fuer zukuenftige Engineering-Module. ProTool bleibt als erstes read-only Modul angebunden.</p>
+                </div>
+              </div>
+              <aside class="engineering-properties" aria-label="Eigenschaften">
+                <h2>Eigenschaften</h2>
+                <dl>
+                  <dt>Projekt</dt>
+                  <dd>Beispielprojekt</dd>
+                  <dt>Status</dt>
+                  <dd>Demo-Daten</dd>
+                  <dt>Modus</dt>
+                  <dd>Read-only</dd>
+                </dl>
+              </aside>
+            </div>
+          </section>
+
           <section id="research" class="hud-panel research-panel">
             <div class="panel-heading">
               <span>Web Recherche</span>
@@ -478,6 +537,6 @@
       </main>
     </div>
 
-    <script src="/static/dashboard.js?v=protool-upload-20260628" defer></script>
+    <script src="/static/dashboard.js?v=engineering-workspace-20260628" defer></script>
   </body>
 </html>
