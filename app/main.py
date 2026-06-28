@@ -2,6 +2,7 @@ import os
 import re
 import time
 import threading
+from dataclasses import asdict
 from uuid import uuid4
 from typing import Any
 from pathlib import Path
@@ -58,6 +59,7 @@ from app.tools.productivity.providers.gmail_provider import GmailProvider
 from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
 from app.tools.web.web_research_tool import WebResearchTool, get_web_research_status
 from hammer_jarvis.engineering.demo import get_demo_projects
+from hammer_jarvis.engineering.graph import EngineeringGraph, GraphBuilder, GraphNode
 from hammer_jarvis.engineering.plugins import get_engineering_modules
 from hammer_jarvis.tools.protool.report import analyze_protool_csv
 
@@ -260,6 +262,26 @@ async def _save_protool_upload(upload: UploadFile) -> tuple[Path, str]:
                 break
             handle.write(chunk)
     return target, original_name
+
+
+def _engineering_demo_graph(project_id: str = "demo-project") -> EngineeringGraph:
+    try:
+        return GraphBuilder().build_demo_graph(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _graph_payload(graph: EngineeringGraph) -> dict[str, Any]:
+    return {
+        "nodes": [asdict(node) for node in graph.nodes],
+        "edges": [asdict(edge) for edge in graph.edges],
+    }
+
+
+def _node_payload(node: GraphNode | None) -> dict[str, Any]:
+    if node is None:
+        raise HTTPException(status_code=404, detail="Engineering graph node not found.")
+    return asdict(node)
 
 
 class EntityActionRequest(BaseModel):
@@ -932,6 +954,33 @@ def assistant_engineering_modules() -> list[dict[str, str]]:
 @app.get("/assistant/engineering/projects")
 def assistant_engineering_projects() -> list[dict[str, Any]]:
     return get_demo_projects()
+
+
+@app.get("/assistant/engineering/graph/projects/{project_id}")
+def assistant_engineering_graph_project(project_id: str) -> dict[str, Any]:
+    return _graph_payload(_engineering_demo_graph(project_id))
+
+
+@app.get("/assistant/engineering/graph/nodes/{node_id}")
+def assistant_engineering_graph_node(node_id: str) -> dict[str, Any]:
+    graph = _engineering_demo_graph()
+    return _node_payload(graph.get_node(node_id))
+
+
+@app.get("/assistant/engineering/graph/search")
+def assistant_engineering_graph_search(q: str = Query(min_length=1)) -> dict[str, Any]:
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Search query must not be empty.")
+    graph = _engineering_demo_graph()
+    return {"query": q, "results": [asdict(node) for node in graph.search(q)]}
+
+
+@app.get("/assistant/engineering/graph/impact/{node_id}")
+def assistant_engineering_graph_impact(node_id: str) -> dict[str, Any]:
+    graph = _engineering_demo_graph()
+    if graph.get_node(node_id) is None:
+        raise HTTPException(status_code=404, detail="Engineering graph node not found.")
+    return {"node_id": node_id, "nodes": [asdict(node) for node in graph.impact(node_id)]}
 
 
 @app.post("/assistant/protool/analyze")
