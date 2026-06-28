@@ -478,6 +478,63 @@ Welche PDF enthaelt Energieausweis?
 Suche in Dokumenten nach Rechnungsnummer 12345.
 ```
 
+## Lokales Projektwissen
+
+Hammer Jarvis kann Dokumente als lokales Projektwissen aufnehmen und fuer
+normale Assistant-Fragen als begrenzten Kontext verwenden. Der Speicher ist
+lokal: Standardmaessig liegen Index und verwaltete Uploads unter
+`%LOCALAPPDATA%\HammerJarvis\knowledge`. Es werden keine Dokumente in eine
+Cloud hochgeladen und keine Vektordatenbank verwendet.
+
+Unterstuetzte Uploadformate sind PDF, DOCX, XLSX, XLSM, CSV, TXT, Markdown und
+JSON. Die Standardgrenze pro Upload betraegt 25 MB und kann ueber
+`KNOWLEDGE_MAX_UPLOAD_MB` in der lokalen `.env` angepasst werden. XLSM-Dateien
+werden ausschliesslich lesend verarbeitet; Makros werden nicht ausgefuehrt.
+Bildbasierte oder textlose PDFs erhalten den Status `OCR erforderlich`; OCR ist
+in dieser Version nicht enthalten.
+
+Im Dashboard unter **Projektwissen** koennen Dateien per Drag-and-drop oder
+Dateiauswahl hochgeladen werden. Die Dokumentliste zeigt nur Metadaten und
+begrenzte Vorschauen. Uploads lassen sich neu indexieren oder entfernen. Beim
+Entfernen eines Uploads wird nur die verwaltete Kopie entfernt; beim Entfernen
+eines ueber einen lokalen Pfad indexierten Dokuments bleibt die Originaldatei
+erhalten.
+
+Bestehende lokale Pfadindexierung bleibt moeglich und wird nur fuer die in
+`KNOWLEDGE_ALLOWED_DIRS` erlaubten Ordner akzeptiert. Dokumentnamen, Pfade und
+Inhalte werden validiert; `.env`, Secrets-Verzeichnisse und Dateien ausserhalb
+der erlaubten Ordner werden nicht indexiert.
+
+Wenn eine normale Assistant-Frage passende Dokumenttreffer hat, erhaelt das
+lokale LLM einen begrenzten, als untrusted markierten Dokumentkontext. Lokale
+Pfade gelangen nicht in den LLM-Prompt. Quellen erscheinen ausschliesslich
+unter der jeweiligen Chatantwort, werden nicht als Teil der Antwort vorgelesen
+und enthalten keine SHA-256-Werte, gespeicherten Dateinamen oder Chunk-IDs.
+
+Lokale Knowledge-Endpunkte:
+
+```text
+GET    http://127.0.0.1:8001/assistant/knowledge/status
+POST   http://127.0.0.1:8001/assistant/knowledge/index
+GET    http://127.0.0.1:8001/assistant/knowledge/search?q=Kaufvertrag
+GET    http://127.0.0.1:8001/assistant/knowledge/documents
+POST   http://127.0.0.1:8001/assistant/knowledge/upload
+GET    http://127.0.0.1:8001/assistant/knowledge/documents/{document_id}
+POST   http://127.0.0.1:8001/assistant/knowledge/documents/{document_id}/reindex
+DELETE http://127.0.0.1:8001/assistant/knowledge/documents/{document_id}
+```
+
+Manuelle Windows-PowerShell-Pruefung:
+
+```powershell
+.\scripts\start-jarvis.ps1
+Start-Process http://127.0.0.1:8001/dashboard
+```
+
+Danach eine harmlose lokale Testdatei hochladen, die Quellenanzeige einer
+passenden Chatantwort pruefen und die vollstaendige Checkliste in
+`docs\knowledge-dashboard-manual-check.md` verwenden.
+
 ## Dateien inspizieren und zusammenfassen
 
 Hammer Jarvis kann gefundene lokale Dateien inspizieren, den besten Treffer oeffnen,

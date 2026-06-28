@@ -9,6 +9,7 @@ from app.assistant.actions.action_executor import ActionExecutor
 from app.assistant.actions.action_planner import ActionPlanner
 from app.assistant.actions.pending_action_store import pending_action_store
 from app.assistant.formatters.ecoflow_formatter import format_ecoflow_energy_answer
+from app.assistant.knowledge.context_builder import relevant_knowledge_context
 from app.assistant.knowledge.knowledge_store import KnowledgeStore
 from app.assistant.llm_client import LLMClient, sanitize_identity_response
 from app.assistant.memory.memory_classifier import MemoryClassifier, infer_memory_item
@@ -183,7 +184,13 @@ class AssistantOrchestrator:
 
     def _handle_llm(self, message: str, confirm: bool) -> dict[str, Any]:
         memory_context = relevant_memory_context(message)
-        user_content = f"{memory_context}\n\nNutzerfrage: {message}" if memory_context else message
+        knowledge_context = relevant_knowledge_context(message)
+        context_blocks = []
+        if memory_context:
+            context_blocks.append(f"Persoenliches Gedaechtnis:\n{memory_context}")
+        if knowledge_context["context"]:
+            context_blocks.append(knowledge_context["context"])
+        user_content = "\n\n".join([*context_blocks, f"Nutzerfrage: {message}"])
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
@@ -203,6 +210,7 @@ class AssistantOrchestrator:
                 "tool": "general_answer",
                 "answer": answer,
                 "risk": ActionRisk.GREEN,
+                "knowledge_sources": knowledge_context["sources"],
             }
 
         max_calls = int(os.getenv("LLM_MAX_TOOL_CALLS", "5"))
@@ -238,6 +246,7 @@ class AssistantOrchestrator:
             "answer": answer,
             "risk": ActionRisk.GREEN,
             "tool_outputs": tool_outputs,
+            "knowledge_sources": knowledge_context["sources"],
         }
 
     def _handle_rule_based(

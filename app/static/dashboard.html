@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
-    <link rel="stylesheet" href="/static/dashboard.css?v=voice-bootstrap-20260619">
+    <link rel="stylesheet" href="/static/dashboard.css?v=protool-upload-20260628">
   </head>
   <body>
     <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
@@ -28,6 +28,7 @@
           <a href="#alerts">△ Alerts</a>
           <a href="#actions">✓ Aktionen</a>
           <a href="#chat">● Chat</a>
+          <a href="#protool">ProTool Assistant</a>
         </nav>
         <div class="sidebar-stats">
           <div><span>LLM</span><strong id="llmProvider">-</strong></div>
@@ -201,6 +202,66 @@
             <ul id="generatedFiles" class="signal-list compact"></ul>
           </section>
 
+          <section id="protool" class="hud-panel protool-panel">
+            <div class="panel-heading">
+              <span>ProTool Assistant</span>
+              <button id="protoolAnalyzeButton" class="ghost-button" type="button">Analysieren</button>
+            </div>
+            <p class="muted">Read-only Analyse alter ProTool-CSV-Dateien. Die CSV wird nicht veraendert.</p>
+            <div class="control-row">
+              <input id="protoolFilePath" type="text" autocomplete="off" placeholder="Dateipfad oder Datei auswählen" aria-label="Dateipfad oder Datei auswählen">
+              <button id="protoolBrowseButton" class="ghost-button" type="button">Durchsuchen</button>
+              <input id="protoolFilePicker" type="file" hidden accept=".csv,.txt">
+            </div>
+            <p id="protoolSelectedFileName" class="muted">Ausgewählte Datei: -</p>
+            <div class="control-row protool-options">
+              <select id="protoolPanel" aria-label="ProTool Panel">
+                <option value="OP7">OP7</option>
+                <option value="TD17_4x20">TD17_4x20</option>
+                <option value="TD17_8x40">TD17_8x40</option>
+                <option value="OP17_4x20">OP17_4x20</option>
+                <option value="OP17_8x40">OP17_8x40</option>
+                <option value="OP27_8x40">OP27_8x40</option>
+              </select>
+              <input id="protoolTextColumn" type="number" min="1" step="1" value="2" aria-label="Textspalte">
+              <select id="protoolEncoding" aria-label="Encoding">
+                <option value="cp1252">cp1252</option>
+                <option value="cp1250">cp1250</option>
+                <option value="utf-8">utf-8</option>
+              </select>
+            </div>
+            <label class="checkbox-row">
+              <input id="protoolIncludePreview" type="checkbox">
+              <span>Panel-Vorschau anzeigen</span>
+            </label>
+            <div class="control-row single">
+              <textarea id="protoolBatchFilePaths" rows="4" placeholder="Mehrere CSV-Dateipfade, je eine Datei pro Zeile"></textarea>
+            </div>
+            <div class="quick-row">
+              <button id="protoolBatchAnalyzeButton" class="ghost-button" type="button">Batch analysieren</button>
+            </div>
+            <p id="protoolStatus" class="muted">Bereit fuer ProTool-CSV-Analyse.</p>
+            <dl id="protoolProjectSummary" class="protool-summary"></dl>
+            <dl id="protoolSummary" class="protool-summary"></dl>
+            <div id="protoolNoIssues" class="ok-message" hidden>Keine Probleme gefunden.</div>
+            <div class="protool-table-wrap">
+              <table class="protool-issues-table" aria-label="ProTool Issues">
+                <thead>
+                  <tr>
+                    <th>row</th>
+                    <th>type</th>
+                    <th>line</th>
+                    <th>max</th>
+                    <th>actual</th>
+                    <th>text</th>
+                  </tr>
+                </thead>
+                <tbody id="protoolIssuesBody"></tbody>
+              </table>
+            </div>
+            <div id="protoolFileReports" class="protool-file-reports"></div>
+          </section>
+
           <section id="research" class="hud-panel research-panel">
             <div class="panel-heading">
               <span>Web Recherche</span>
@@ -321,12 +382,22 @@
               <button id="refreshKnowledge" class="ghost-button" type="button">Aktualisieren</button>
             </div>
             <p id="knowledgeStatus" class="muted">Lokaler Wissensspeicher wird geladen.</p>
+            <div id="knowledgeDropZone" class="knowledge-drop-zone" role="button" tabindex="0" aria-describedby="knowledgeSupportedFormats">
+              <strong>Dokumente lokal hochladen</strong>
+              <span>Dateien hier ablegen oder auswählen. Die Speicherung erfolgt nur lokal.</span>
+              <button id="knowledgeSelectFilesButton" class="ghost-button" type="button">Dateien auswählen</button>
+              <input id="knowledgeFileInput" type="file" hidden multiple accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md,.json">
+            </div>
+            <p id="knowledgeSupportedFormats" class="muted">Unterstützt: PDF, DOCX, XLSX, XLSM, CSV, TXT, Markdown, JSON. Uploadlimit wird geladen.</p>
+            <p class="muted">Gescannte PDFs benötigen OCR und werden in dieser Version noch nicht gelesen.</p>
+            <ul id="knowledgeUploadQueue" class="signal-list compact"></ul>
+            <p id="knowledgeUploadSummary" class="muted"></p>
             <div class="control-row">
               <input id="knowledgeSearchInput" type="text" autocomplete="off" placeholder="Wissensspeicher durchsuchen...">
               <button id="knowledgeSearchButton" type="button">Suchen</button>
             </div>
             <div class="control-row">
-              <input id="knowledgeIndexInput" type="text" autocomplete="off" placeholder="Ordner oder Datei indexieren...">
+              <input id="knowledgeIndexInput" type="text" autocomplete="off" placeholder="Erweiterte Funktion: Lokalen Pfad indexieren">
               <button id="knowledgeIndexButton" type="button">Indexieren</button>
             </div>
             <ul id="knowledgeResults" class="signal-list compact"></ul>
@@ -407,6 +478,6 @@
       </main>
     </div>
 
-    <script src="/static/dashboard.js?v=voice-bootstrap-20260619" defer></script>
+    <script src="/static/dashboard.js?v=protool-upload-20260628" defer></script>
   </body>
 </html>

@@ -1,12 +1,14 @@
 import os
+import re
 import time
 import threading
+from uuid import uuid4
 from typing import Any
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import File, FastAPI, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -19,6 +21,7 @@ from app.assistant.orchestrator import AssistantOrchestrator
 from app.assistant.llm_client import LLMClient, sanitize_identity_response
 from app.assistant.llm.native_ollama_client import NativeOllamaClient
 from app.assistant.knowledge.knowledge_store import KnowledgeStore
+from app.assistant.knowledge.storage import SUPPORTED_KNOWLEDGE_EXTENSIONS, max_upload_bytes
 from app.assistant.memory.memory_classifier import MemoryClassifier
 from app.assistant.memory.memory_store import MemoryStore
 from app.assistant.performance.metrics_store import metrics_store
@@ -54,6 +57,7 @@ from app.tools.productivity.email_service import EmailService
 from app.tools.productivity.providers.gmail_provider import GmailProvider
 from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
 from app.tools.web.web_research_tool import WebResearchTool, get_web_research_status
+from hammer_jarvis.tools.protool.report import analyze_protool_csv
 
 
 app = FastAPI(title="Hammer Jarvis", version="0.1")
@@ -210,6 +214,50 @@ class MemoryRepairRequest(BaseModel):
 class KnowledgeIndexRequest(BaseModel):
     path: str = Field(min_length=1)
     recursive: bool = True
+
+
+class ProToolAnalyzeRequest(BaseModel):
+    file_path: str = Field(min_length=1)
+    panel: str = Field(min_length=1)
+    text_column: int = Field(ge=1)
+    encoding: str = "cp1252"
+    report_empty: bool = False
+    include_preview: bool = False
+
+
+class ProToolAnalyzeBatchRequest(BaseModel):
+    file_paths: list[str] = Field(min_length=1)
+    panel: str = Field(min_length=1)
+    text_column: int = Field(ge=1)
+    encoding: str = "cp1252"
+    report_empty: bool = False
+    include_preview: bool = False
+
+
+KNOWLEDGE_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+KNOWLEDGE_DETAIL_PREVIEW_COUNT = 5
+KNOWLEDGE_DETAIL_PREVIEW_CHARS = 320
+PROTOOL_UPLOAD_DIR = Path("workspace") / "exports" / "protool_uploads"
+PROTOOL_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+def _safe_protool_upload_name(filename: str | None) -> str:
+    original_name = Path(filename or "protool.csv").name
+    sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", original_name).strip(" .")
+    return sanitized or "protool.csv"
+
+
+async def _save_protool_upload(upload: UploadFile) -> tuple[Path, str]:
+    original_name = _safe_protool_upload_name(upload.filename)
+    PROTOOL_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    target = PROTOOL_UPLOAD_DIR / f"{uuid4().hex}_{original_name}"
+    with target.open("wb") as handle:
+        while True:
+            chunk = await upload.read(PROTOOL_UPLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            handle.write(chunk)
+    return target, original_name
 
 
 class EntityActionRequest(BaseModel):
@@ -874,6 +922,84 @@ def assistant_file_open_latest() -> dict[str, Any]:
     return FileOpenTool().open_latest_export()
 
 
+@app.post("/assistant/protool/analyze")
+def assistant_protool_analyze(request: ProToolAnalyzeRequest) -> dict[str, Any]:
+    try:
+        return analyze_protool_csv(
+            request.file_path,
+            panel=request.panel,
+            text_column=request.text_column,
+            encoding=request.encoding,
+            report_empty_texts=request.report_empty,
+            include_preview=request.include_preview,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/assistant/protool/upload-analyze")
+async def assistant_protool_upload_analyze(
+    file: UploadFile = File(...),
+    panel: str = Form(...),
+    text_column: int = Form(...),
+    encoding: str = Form("cp1252"),
+    include_preview: bool = Form(False),
+) -> dict[str, Any]:
+    temp_path: Path | None = None
+    try:
+        temp_path, _original_name = await _save_protool_upload(file)
+        return analyze_protool_csv(
+            temp_path,
+            panel=panel,
+            text_column=text_column,
+            encoding=encoding,
+            include_preview=include_preview,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await file.close()
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+@app.post("/assistant/protool/analyze-batch")
+def assistant_protool_analyze_batch(request: ProToolAnalyzeBatchRequest) -> dict[str, Any]:
+    try:
+        reports = [
+            analyze_protool_csv(
+                file_path,
+                panel=request.panel,
+                text_column=request.text_column,
+                encoding=request.encoding,
+                report_empty_texts=request.report_empty,
+                include_preview=request.include_preview,
+            )
+            for file_path in request.file_paths
+        ]
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "files": reports,
+        "summary": {
+            "file_count": len(reports),
+            "total_rows": sum(int(report.get("rows") or 0) for report in reports),
+            "total_checked_rows": sum(int(report.get("checked_rows") or 0) for report in reports),
+            "total_issues": sum(len(report.get("issues") or []) for report in reports),
+        },
+    }
+
+
 @app.get("/assistant/web/status")
 def assistant_web_status() -> dict[str, Any]:
     return get_web_research_status()
@@ -1476,7 +1602,35 @@ def assistant_memory_export() -> dict[str, Any]:
 
 @app.get("/assistant/knowledge/status")
 def assistant_knowledge_status() -> dict[str, Any]:
-    return KnowledgeStore().status()
+    store = KnowledgeStore()
+    result = store.status()
+    documents = store.list_documents().get("documents", [])
+    extractor_status = {
+        "pdf": True,
+        "docx": True,
+        "xlsx": True,
+        "xlsm": True,
+        "csv": True,
+        "txt": True,
+        "md": True,
+        "json": True,
+        "ocr": False,
+    }
+    return {
+        **result,
+        "data_dir": str(store.path.parent),
+        "upload_dir": str(store.upload_dir),
+        "store_file": str(store.path),
+        "document_count": len(documents),
+        "chunk_count": int(result.get("chunk_count", 0)),
+        "total_size_bytes": sum(int(item.get("size_bytes") or 0) for item in documents),
+        "supported_extensions": sorted(SUPPORTED_KNOWLEDGE_EXTENSIONS),
+        "max_upload_mb": max(1, max_upload_bytes() // (1024 * 1024)),
+        "embedding_enabled": False,
+        "search_mode": "keyword",
+        "extractor_status": extractor_status,
+        "extractor_availability": extractor_status,
+    }
 
 
 @app.post("/assistant/knowledge/index")
@@ -1496,6 +1650,202 @@ def assistant_knowledge_search(q: str = Query(..., min_length=1), limit: int = Q
 @app.get("/assistant/knowledge/documents")
 def assistant_knowledge_documents() -> dict[str, Any]:
     return KnowledgeStore().list_documents()
+
+
+@app.post("/assistant/knowledge/upload")
+async def assistant_knowledge_upload(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+    """Store and index each local upload independently without retaining request files."""
+
+    store = KnowledgeStore()
+    documents: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    success_count = 0
+    maximum_bytes = max_upload_bytes()
+
+    for upload in files:
+        started = time.perf_counter()
+        raw_filename = str(upload.filename or "")
+        display_name = Path(raw_filename.replace("\\", "/")).name
+        size_bytes = 0
+        content: bytes | bytearray | None = None
+        content_buffer: bytearray | None = None
+        document_id: str | None = None
+        extension = Path(display_name).suffix.lower()
+        duplicate = False
+        reason: str | None = None
+        success = False
+        try:
+            content_buffer = bytearray()
+            while True:
+                block = await upload.read(KNOWLEDGE_UPLOAD_READ_CHUNK_BYTES)
+                if not block:
+                    break
+                size_bytes += len(block)
+                if size_bytes > maximum_bytes:
+                    reason = "file_too_large"
+                    break
+                content_buffer.extend(block)
+            if reason is None:
+                content = content_buffer
+                stored = store.store_upload(raw_filename, content, upload.content_type)
+                content_buffer.clear()
+                content = None
+                document = stored.get("document")
+                if isinstance(document, dict):
+                    document_id = str(document.get("document_id") or "") or None
+                duplicate = bool(stored.get("duplicate"))
+                if not stored.get("stored"):
+                    reason = str(stored.get("reason") or "upload_write_failed")
+                elif duplicate:
+                    success = True
+                    success_count += 1
+                    documents.append(_knowledge_upload_document(document, duplicate=True))
+                else:
+                    indexed = store.reindex_document(document_id or "")
+                    if indexed.get("indexed"):
+                        success = True
+                        success_count += 1
+                        documents.append(_knowledge_upload_document(indexed.get("document"), duplicate=False))
+                    elif indexed.get("reason") == "ocr_required":
+                        # A valid image-only PDF is stored successfully; OCR is intentionally not available in v1.
+                        success = True
+                        success_count += 1
+                        documents.append(
+                            _knowledge_upload_document(
+                                document,
+                                duplicate=False,
+                                extraction_status="ocr_required",
+                                extraction_message=str(indexed.get("message") or "OCR wird noch nicht unterstützt."),
+                            )
+                        )
+                    else:
+                        reason = str(indexed.get("reason") or "index_write_failed")
+            if reason is not None:
+                errors.append(
+                    {
+                        "filename": display_name,
+                        "name": display_name,
+                        "reason": reason,
+                        "status_code": _knowledge_error_status(reason),
+                        "message": _knowledge_reason_message(reason),
+                    }
+                )
+        except Exception:
+            reason = "upload_write_failed"
+            errors.append(
+                {
+                    "filename": display_name,
+                    "name": display_name,
+                    "reason": reason,
+                    "status_code": _knowledge_error_status(reason),
+                    "message": _knowledge_reason_message(reason),
+                }
+            )
+        finally:
+            await upload.close()
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            write_audit_log(
+                "knowledge_upload",
+                {
+                    "operation": "upload",
+                    "document_id": document_id,
+                    "extension": extension,
+                    "size_bytes": size_bytes,
+                    "duplicate": duplicate,
+                    "success": success,
+                    "reason": reason,
+                    "duration_ms": elapsed_ms,
+                },
+            )
+            del content
+            if content_buffer is not None:
+                content_buffer.clear()
+
+    return {
+        "uploaded": success_count > 0,
+        "success_count": success_count,
+        "failed_count": len(errors),
+        "documents": documents,
+        "errors": errors,
+    }
+
+
+@app.get("/assistant/knowledge/documents/{document_id}")
+def assistant_knowledge_document_detail(document_id: str) -> dict[str, Any]:
+    store = KnowledgeStore()
+    found = store.get_document(document_id)
+    if not found.get("found"):
+        _raise_knowledge_error(str(found.get("reason") or "document_not_found"))
+    chunks = store.get_document_chunks(document_id)
+    if chunks.get("error"):
+        _raise_knowledge_error(str(chunks.get("reason") or "index_recovery_failed"))
+    return {
+        "document": _public_knowledge_document(found.get("document")),
+        "chunk_count": int(chunks.get("count") or 0),
+        "chunks": [
+            _public_knowledge_chunk(document_id, item, fallback_index)
+            for fallback_index, item in enumerate(
+                list(chunks.get("chunks") or [])[:KNOWLEDGE_DETAIL_PREVIEW_COUNT]
+            )
+        ],
+    }
+
+
+@app.post("/assistant/knowledge/documents/{document_id}/reindex")
+def assistant_knowledge_reindex_document(document_id: str) -> dict[str, Any]:
+    started = time.perf_counter()
+    store = KnowledgeStore()
+    result = store.reindex_document(document_id)
+    write_audit_log(
+        "knowledge_reindex",
+        {
+            "operation": "reindex",
+            "document_id": document_id,
+            "extension": _knowledge_document_extension(store, document_id),
+            "success": bool(result.get("indexed")),
+            "reason": result.get("reason"),
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+        },
+    )
+    if not result.get("indexed") and result.get("reason") != "ocr_required":
+        _raise_knowledge_error(str(result.get("reason") or "index_write_failed"))
+    document = result.get("document")
+    if not isinstance(document, dict) and result.get("reason") == "ocr_required":
+        document = store.get_document(document_id).get("document")
+    return {
+        "indexed": bool(result.get("indexed")),
+        "document": _public_knowledge_document(document),
+        "chunk_count": int(result.get("chunk_count") or 0),
+        "reason": result.get("reason"),
+        "message": result.get("message"),
+    }
+
+
+@app.delete("/assistant/knowledge/documents/{document_id}")
+def assistant_knowledge_delete_document(document_id: str) -> dict[str, Any]:
+    started = time.perf_counter()
+    store = KnowledgeStore()
+    extension = _knowledge_document_extension(store, document_id)
+    result = store.delete_document(document_id)
+    write_audit_log(
+        "knowledge_delete",
+        {
+            "operation": "delete",
+            "document_id": document_id,
+            "extension": extension,
+            "success": bool(result.get("deleted")),
+            "reason": result.get("reason"),
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+        },
+    )
+    if not result.get("deleted"):
+        _raise_knowledge_error(str(result.get("reason") or "document_not_found"))
+    return {
+        "deleted": True,
+        "physical_file_deleted": bool(result.get("physical_file_deleted")),
+        "cleanup_pending": bool(result.get("cleanup_pending")),
+        "document_id": document_id,
+    }
 
 
 @app.get("/assistant/calendar/today")
@@ -1706,6 +2056,113 @@ def _format_human_status_answer(human_status: dict[str, Any]) -> str:
     if details:
         return f"{headline} {'; '.join(str(item) for item in details)}"
     return headline
+
+
+def _knowledge_upload_document(
+    document: Any,
+    *,
+    duplicate: bool,
+    extraction_status: str | None = None,
+    extraction_message: str | None = None,
+) -> dict[str, Any]:
+    payload = _public_knowledge_document(document)
+    payload["duplicate"] = duplicate
+    if extraction_status is not None:
+        payload["extraction_status"] = extraction_status
+    if extraction_message is not None:
+        payload["extraction_message"] = extraction_message
+    return payload
+
+
+def _public_knowledge_document(document: Any) -> dict[str, Any]:
+    """Return required document metadata, including local path, without chunk text or binaries."""
+
+    if not isinstance(document, dict):
+        return {}
+    allowed = (
+        "document_id",
+        "name",
+        "original_name",
+        "stored_name",
+        "extension",
+        "mime_type",
+        "size_bytes",
+        "sha256",
+        "uploaded_at",
+        "indexed_at",
+        "modified_at",
+        "chunk_count",
+        "extraction_status",
+        "extraction_message",
+        "source_type",
+        "path",
+    )
+    return {key: document[key] for key in allowed if key in document}
+
+
+def _public_knowledge_chunk(document_id: str, chunk: Any, fallback_index: int) -> dict[str, Any]:
+    item = chunk if isinstance(chunk, dict) else {}
+    try:
+        index = int(item.get("index", fallback_index))
+    except (TypeError, ValueError):
+        index = fallback_index
+    return {
+        "chunk_id": str(item.get("chunk_id") or f"{document_id}:{index}"),
+        "index": index,
+        "chunk_index": index,
+        "preview": str(item.get("text") or "")[:KNOWLEDGE_DETAIL_PREVIEW_CHARS],
+    }
+
+
+def _knowledge_document_extension(store: KnowledgeStore, document_id: str) -> str | None:
+    result = store.get_document(document_id)
+    document = result.get("document")
+    return str(document.get("extension")) if isinstance(document, dict) and document.get("extension") else None
+
+
+def _raise_knowledge_error(reason: str) -> None:
+    raise HTTPException(
+        status_code=_knowledge_error_status(reason),
+        detail={"reason": reason, "message": _knowledge_reason_message(reason)},
+    )
+
+
+def _knowledge_error_status(reason: str) -> int:
+    return {
+        "document_not_found": 404,
+        "source_file_missing": 409,
+        "invalid_filename": 400,
+        "unsafe_upload_path": 400,
+        "unsafe_pending_delete_path": 400,
+        "unsupported_file_type": 415,
+        "invalid_pdf_header": 400,
+        "empty_file": 400,
+        "empty_or_placeholder_file": 400,
+        "file_too_large": 413,
+        "index_recovery_failed": 500,
+        "index_write_failed": 500,
+        "upload_write_failed": 500,
+    }.get(reason, 500)
+
+
+def _knowledge_reason_message(reason: str) -> str:
+    messages = {
+        "document_not_found": "Das Dokument wurde nicht gefunden.",
+        "source_file_missing": "Die lokale Quelldatei ist nicht mehr verfügbar.",
+        "invalid_filename": "Der Dateiname ist ungültig.",
+        "unsafe_upload_path": "Der angegebene Dateipfad ist nicht zulässig.",
+        "unsafe_pending_delete_path": "Der lokale Dateipfad ist nicht zulässig.",
+        "unsupported_file_type": "Dieser Dateityp wird nicht unterstützt.",
+        "invalid_pdf_header": "Die Datei hat keine gültige PDF-Signatur.",
+        "empty_file": "Die Datei ist leer.",
+        "empty_or_placeholder_file": "Die Datei ist leer oder nur ein lokaler Platzhalter.",
+        "file_too_large": "Die Datei überschreitet die zulässige Uploadgröße.",
+        "ocr_required": "Das PDF enthält keinen extrahierbaren Text. OCR wird noch nicht unterstützt.",
+        "index_recovery_failed": "Der lokale Wissensindex kann nicht sicher gelesen werden.",
+        "index_write_failed": "Der lokale Wissensindex konnte nicht geschrieben werden.",
+        "upload_write_failed": "Die Datei konnte nicht lokal gespeichert werden.",
+    }
+    return messages.get(reason, "Die Dokumentverarbeitung konnte nicht sicher abgeschlossen werden.")
 
 
 def _to_http_exception(exc: Exception) -> HTTPException:

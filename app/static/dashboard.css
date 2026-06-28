@@ -64,7 +64,8 @@ body::after {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -394,10 +395,19 @@ h1 {
     "mission core energy"
     "home core energy"
     "mail chat calendar"
+    "files chat protool"
     "files chat research"
     "alerts chat research"
+    "performance chat research"
     "skills chat research"
-    "actions chat research";
+    "smart-home-actions chat research"
+    "smart-home-auto-policy chat research"
+    "ha-control chat research"
+    "memory chat research"
+    "actions chat research"
+    "knowledge chat research";
+  grid-auto-rows: minmax(min-content, max-content);
+  align-items: start;
   gap: 16px;
   margin-top: 18px;
 }
@@ -444,11 +454,138 @@ h1 {
 .mail-panel { grid-area: mail; }
 .calendar-panel { grid-area: calendar; }
 .files-panel { grid-area: files; }
+.protool-panel { grid-area: protool; }
 .research-panel { grid-area: research; }
 .alerts-panel { grid-area: alerts; }
 .skills-panel { grid-area: skills; }
-.actions-panel { grid-area: actions; }
+#performance { grid-area: performance; }
+#smartHomeActions { grid-area: smart-home-actions; }
+#smartHomeAutoPolicy { grid-area: smart-home-auto-policy; }
+#haControlCenter { grid-area: ha-control; }
+#memory { grid-area: memory; }
+#knowledge { grid-area: knowledge; }
+#actions { grid-area: actions; }
 .chat-panel { grid-area: chat; }
+
+.protool-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 12px 0;
+}
+
+.protool-summary div {
+  border: 1px solid rgba(0, 229, 255, 0.16);
+  padding: 8px;
+  background: rgba(0, 229, 255, 0.05);
+}
+
+.protool-summary dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.protool-summary dd {
+  margin: 3px 0 0;
+  color: var(--text);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.ok-message {
+  border: 1px solid rgba(98, 255, 155, 0.32);
+  padding: 10px;
+  color: var(--green);
+  background: rgba(98, 255, 155, 0.08);
+}
+
+.protool-table-wrap {
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+.protool-issues-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.protool-issues-table th,
+.protool-issues-table td {
+  border-bottom: 1px solid rgba(0, 229, 255, 0.14);
+  padding: 7px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.protool-issues-table th {
+  color: var(--cyan);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.protool-issues-table td:last-child {
+  min-width: 180px;
+  overflow-wrap: anywhere;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  color: var(--muted);
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+textarea {
+  width: 100%;
+  min-height: 94px;
+  resize: vertical;
+}
+
+.protool-file-reports {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.protool-file-report {
+  border: 1px solid rgba(0, 229, 255, 0.18);
+  padding: 12px;
+  background: rgba(0, 229, 255, 0.04);
+}
+
+.protool-file-report h3 {
+  margin: 0 0 8px;
+  color: var(--cyan);
+  font-size: 14px;
+}
+
+.protool-preview-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.protool-preview {
+  border: 1px solid rgba(0, 255, 198, 0.16);
+  padding: 8px;
+  background: rgba(0, 255, 198, 0.04);
+}
+
+.protool-preview pre {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: pre;
+  overflow-x: auto;
+}
 
 .panel-heading {
   display: flex;
@@ -976,6 +1113,57 @@ select:focus {
   margin: 10px 0;
 }
 
+.knowledge-drop-zone {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0;
+  padding: 14px;
+  border: 1px dashed rgba(0, 229, 255, 0.44);
+  border-radius: 6px;
+  background: rgba(0, 229, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.knowledge-drop-zone:focus-visible,
+.knowledge-drop-zone.is-dragging {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+  background: rgba(0, 229, 255, 0.11);
+}
+
+.knowledge-drop-zone .ghost-button {
+  justify-self: start;
+}
+
+.knowledge-document {
+  display: grid;
+  gap: 5px;
+}
+
+.knowledge-document-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.knowledge-chat-sources {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 229, 255, 0.16);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.knowledge-chat-sources strong {
+  color: var(--cyan);
+}
+
+.knowledge-chat-sources ul {
+  margin: 5px 0 0;
+  padding-left: 18px;
+}
+
 .research-answer {
   min-height: 72px;
   border: 1px solid rgba(0, 229, 255, 0.14);
@@ -1118,8 +1306,12 @@ select:focus {
       "home chat"
       "mail chat"
       "calendar research"
-      "files alerts"
-      "skills actions";
+      "files protool"
+      "alerts research"
+      "performance skills"
+      "smart-home-actions smart-home-auto-policy"
+      "ha-control memory"
+      "actions knowledge";
   }
 
   .core-stage {
@@ -1152,10 +1344,17 @@ select:focus {
       "mail"
       "calendar"
       "files"
+      "protool"
       "research"
       "alerts"
+      "performance"
       "skills"
+      "smart-home-actions"
+      "smart-home-auto-policy"
+      "ha-control"
+      "memory"
       "actions"
+      "knowledge"
       "chat";
   }
 

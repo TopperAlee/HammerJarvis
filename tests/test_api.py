@@ -234,8 +234,8 @@ def test_dashboard_build_marker_and_cache_busting_are_present() -> None:
     html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
     js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
 
-    assert 'src="/static/dashboard.js?v=voice-bootstrap-20260619" defer' in html
-    assert 'const DASHBOARD_BUILD = "voice-bootstrap-20260619"' in js
+    assert 'src="/static/dashboard.js?v=protool-upload-20260628" defer' in html
+    assert 'const DASHBOARD_BUILD = "protool-upload-20260628"' in js
     assert "dashboard.js geladen" in js
     assert "document.documentElement.dataset.dashboardBuild = DASHBOARD_BUILD" in js
     assert "Build: ${DASHBOARD_BUILD}" in js

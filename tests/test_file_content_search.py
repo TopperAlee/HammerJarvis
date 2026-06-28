@@ -1,9 +1,11 @@
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from docx import Document
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
+import pytest
 
 from app.assistant.orchestrator import AssistantOrchestrator
 from app.main import app
@@ -265,3 +267,153 @@ def test_all_candidate_pdfs_fail_message_mentions_placeholders(monkeypatch, tmp_
 
     assert "OneDrive-Platzhalter" in result["message"]
     assert result["skipped"][0]["reason"] == "empty_or_placeholder_file"
+
+
+def test_textless_valid_pdf_requires_ocr(tmp_path) -> None:
+    from pypdf import PdfWriter
+
+    from app.tools.files.content_extractors import extract_text
+
+    path = tmp_path / "scan.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    with path.open("wb") as file:
+        writer.write(file)
+
+    result = extract_text(path)
+
+    assert result["skipped"] is True
+    assert result["reason"] == "ocr_required"
+    assert result["message"] == "Das PDF enthält keinen extrahierbaren Text. OCR wird noch nicht unterstützt."
+    assert result["page_count"] == 1
+
+
+def test_docx_extracts_headings_paragraphs_and_tables(tmp_path) -> None:
+    from app.tools.files.content_extractors import extract_text
+
+    path = tmp_path / "vertrag.docx"
+    document = Document()
+    document.add_heading("Kaufvertrag", level=1)
+    document.add_paragraph("Der Notartermin ist am Montag.")
+    table = document.add_table(rows=2, cols=2)
+    table.rows[0].cells[0].text = "Kategorie"
+    table.rows[0].cells[1].text = "Wert"
+    table.rows[1].cells[0].text = "Preis"
+    table.rows[1].cells[1].text = "250000"
+    document.save(path)
+
+    result = extract_text(path)
+
+    assert "[Überschrift: Kaufvertrag]" in result["text"]
+    assert "Der Notartermin ist am Montag." in result["text"]
+    assert "Zeile 1 | Kategorie: Preis | Wert: 250000" in result["text"]
+
+
+def test_xlsx_extracts_structured_rows_from_multiple_sheets(tmp_path) -> None:
+    from app.tools.files.content_extractors import extract_text
+
+    path = tmp_path / "kosten.xlsx"
+    workbook = Workbook()
+    costs = workbook.active
+    costs.title = "Kosten"
+    costs.append(["Kategorie", "Menge", "Preis", "Datum", "Aktiv"])
+    costs.append(["Boden", 42, 28.90, date(2026, 6, 21), True])
+    notes = workbook.create_sheet("Notizen")
+    notes.append(["Thema", "Text"])
+    notes.append(["Haus", "Energieausweis prüfen"])
+    workbook.save(path)
+
+    result = extract_text(path)
+
+    assert result["sheet_count"] == 2
+    assert result["row_count"] == 2
+    assert "[Arbeitsblatt: Kosten]" in result["text"]
+    assert "Zeile 1 | Kategorie: Boden | Menge: 42 | Preis: 28.90 | Datum: 2026-06-21 | Aktiv: true" in result["text"]
+    assert "[Arbeitsblatt: Notizen]" in result["text"]
+
+
+def test_xlsm_is_read_only_and_workbook_closes(monkeypatch, tmp_path) -> None:
+    from app.tools.files.content_extractors import extract_text_from_xlsx
+
+    path = tmp_path / "daten.xlsm"
+    path.write_bytes(b"placeholder")
+    calls: dict[str, Any] = {}
+
+    class FakeSheet:
+        title = "Daten"
+
+        def iter_rows(self, values_only: bool = True):
+            assert values_only is True
+            return iter([("Name", "Wert"), ("PV", 42)])
+
+    class FakeWorkbook:
+        worksheets = [FakeSheet()]
+
+        def close(self) -> None:
+            calls["closed"] = True
+
+    def fake_load_workbook(*args: Any, **kwargs: Any) -> FakeWorkbook:
+        calls["args"] = args
+        calls["kwargs"] = kwargs
+        return FakeWorkbook()
+
+    monkeypatch.setattr("app.tools.files.content_extractors.load_workbook", fake_load_workbook)
+
+    text = extract_text_from_xlsx(path)
+
+    assert "[Arbeitsblatt: Daten]" in text
+    assert calls["kwargs"] == {"read_only": True, "data_only": True, "keep_vba": False}
+    assert calls["closed"] is True
+
+
+def test_xlsx_workbook_closes_when_iteration_fails(monkeypatch, tmp_path) -> None:
+    from app.tools.files.content_extractors import extract_text_from_xlsx
+
+    path = tmp_path / "fehler.xlsx"
+    path.write_bytes(b"placeholder")
+    calls: dict[str, Any] = {}
+
+    class BrokenWorkbook:
+        @property
+        def worksheets(self):
+            raise ValueError("kaputt")
+
+        def close(self) -> None:
+            calls["closed"] = True
+
+    monkeypatch.setattr("app.tools.files.content_extractors.load_workbook", lambda *args, **kwargs: BrokenWorkbook())
+
+    with pytest.raises(ValueError, match="kaputt"):
+        extract_text_from_xlsx(path)
+
+    assert calls["closed"] is True
+
+
+def test_csv_supports_comma_semicolon_and_legacy_encoding(tmp_path) -> None:
+    from app.tools.files.content_extractors import extract_text
+
+    comma = tmp_path / "comma.csv"
+    comma.write_text("Kategorie,Menge\nBoden,42\n", encoding="utf-8")
+    semicolon = tmp_path / "semicolon.csv"
+    semicolon.write_text("Kategorie;Menge\nFenster;8\n", encoding="utf-8")
+    legacy = tmp_path / "legacy.csv"
+    legacy.write_bytes("Kategorie;Hinweis\nBöden;prüfen\n".encode("cp1252"))
+
+    assert "Zeile 1 | Kategorie: Boden | Menge: 42" in extract_text(comma)["text"]
+    assert "Zeile 1 | Kategorie: Fenster | Menge: 8" in extract_text(semicolon)["text"]
+    assert "Böden" in extract_text(legacy)["text"]
+
+
+def test_txt_markdown_and_json_keep_readable_content(tmp_path) -> None:
+    from app.tools.files.content_extractors import extract_text
+
+    text_path = tmp_path / "notiz.txt"
+    markdown_path = tmp_path / "notiz.md"
+    json_path = tmp_path / "daten.json"
+    text_path.write_text("Erster Absatz.\n\nZweiter Absatz.", encoding="utf-8")
+    markdown_path.write_text("# Haus\n\nEnergieausweis prüfen.", encoding="utf-8")
+    json_path.write_text('{"haus": {"status": "prüfen", "zimmer": 4}}', encoding="utf-8")
+
+    assert "Erster Absatz.\n\nZweiter Absatz." in extract_text(text_path)["text"]
+    assert "# Haus" in extract_text(markdown_path)["text"]
+    assert '"status": "prüfen"' in extract_text(json_path)["text"]

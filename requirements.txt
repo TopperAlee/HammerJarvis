@@ -53,3 +53,4 @@ openpyxl
 beautifulsoup4
 pypdf
 python-docx
+python-multipart

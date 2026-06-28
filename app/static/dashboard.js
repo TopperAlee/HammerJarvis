@@ -1,4 +1,4 @@
-const DASHBOARD_BUILD = "voice-bootstrap-20260619";
+const DASHBOARD_BUILD = "protool-upload-20260628";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
 const fetchTimeoutMs = 15000;
@@ -40,6 +40,14 @@ const HANDS_FREE_STATES = {
 const HANDS_FREE_RECONNECT_DELAYS_MS = [1000, 2000, 5000];
 const HANDS_FREE_STORAGE_KEY = "hammerJarvisHandsFreeWanted";
 const DESKTOP_EVENT_RECONNECT_DELAYS_MS = [1000, 2000, 5000];
+const PROTOOL_PANEL_DIMENSIONS = {
+  OP7: { rows: 4, columns: 20 },
+  TD17_4x20: { rows: 4, columns: 20 },
+  OP17_4x20: { rows: 4, columns: 20 },
+  TD17_8x40: { rows: 8, columns: 40 },
+  OP17_8x40: { rows: 8, columns: 40 },
+  OP27_8x40: { rows: 8, columns: 40 },
+};
 let speechOutputEnabled = true;
 let isListening = false;
 let isAssistantSpeaking = false;
@@ -88,6 +96,8 @@ let desktopEventReconnectAttempt = 0;
 let desktopEventReconnectTimer = null;
 let desktopEventHeartbeatTimer = null;
 let desktopAgentState = "Nicht verbunden";
+let selectedProToolFile = null;
+const knowledgeBusyDocumentIds = new Set();
 
 const elements = {};
 const activities = new Map();
@@ -222,6 +232,29 @@ function bindElements() {
     "knowledgeIndexButton",
     "knowledgeResults",
     "knowledgeDocuments",
+    "knowledgeDropZone",
+    "knowledgeFileInput",
+    "knowledgeSelectFilesButton",
+    "knowledgeUploadQueue",
+    "knowledgeUploadSummary",
+    "knowledgeSupportedFormats",
+    "protoolFilePath",
+    "protoolBrowseButton",
+    "protoolFilePicker",
+    "protoolSelectedFileName",
+    "protoolPanel",
+    "protoolTextColumn",
+    "protoolEncoding",
+    "protoolIncludePreview",
+    "protoolBatchFilePaths",
+    "protoolAnalyzeButton",
+    "protoolBatchAnalyzeButton",
+    "protoolStatus",
+    "protoolProjectSummary",
+    "protoolSummary",
+    "protoolNoIssues",
+    "protoolIssuesBody",
+    "protoolFileReports",
     "refreshActions",
     "pendingActions",
     "runWatchers",
@@ -712,11 +745,71 @@ function renderKnowledgeResult(result) {
   return wrapper;
 }
 
-function renderKnowledgeDocument(document) {
-  const wrapper = document.createElement("span");
-  wrapper.textContent = `${document.name || "-"} · ${document.chunk_count ?? 0} Chunks`;
-  appendCode(wrapper, document.path);
+function renderKnowledgeDocument(knowledgeDocument) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "knowledge-document";
+  const title = document.createElement("strong");
+  title.textContent = knowledgeDocument.original_name || knowledgeDocument.name || "Unbenanntes Dokument";
+  const meta = document.createElement("div");
+  meta.className = "muted";
+  meta.textContent = [
+    (knowledgeDocument.extension || "-").replace(/^\./, "").toUpperCase(),
+    formatFileSize(knowledgeDocument.size_bytes),
+    `${knowledgeDocument.chunk_count ?? 0} Chunks`,
+    formatKnowledgeDate(knowledgeDocument.indexed_at),
+    knowledgeDocumentStatus(knowledgeDocument.extraction_status),
+    knowledgeDocument.source_type === "upload" ? "Upload" : "Lokaler Pfad",
+  ].filter(Boolean).join(" · ");
+  wrapper.append(title, meta);
+  if (knowledgeDocument.extraction_message) {
+    const message = document.createElement("div");
+    message.className = "muted";
+    message.textContent = knowledgeDocument.extraction_message;
+    wrapper.appendChild(message);
+  }
+  const controls = document.createElement("div");
+  controls.className = "knowledge-document-controls";
+  controls.append(
+    createKnowledgeDocumentButton("Details", () => showKnowledgeDetails(knowledgeDocument)),
+    createKnowledgeDocumentButton("Neu indexieren", (button) => reindexKnowledgeDocument(knowledgeDocument, button)),
+    createKnowledgeDocumentButton("Entfernen", (button) => deleteKnowledgeDocument(knowledgeDocument, button)),
+  );
+  wrapper.appendChild(controls);
   return wrapper;
+}
+
+function createKnowledgeDocumentButton(label, action) {
+  const button = document.createElement("button");
+  button.className = "ghost-button small-action";
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", () => action(button));
+  return button;
+}
+
+function formatFileSize(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size) || size < 0) return "-";
+  if (size < 1024) return `${size} Byte`;
+  if (size < 1024 * 1024) return `${(size / 1024).toLocaleString("de-DE", { maximumFractionDigits: 1 })} KB`;
+  return `${(size / (1024 * 1024)).toLocaleString("de-DE", { maximumFractionDigits: 1 })} MB`;
+}
+
+function formatKnowledgeDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" });
+}
+
+function knowledgeDocumentStatus(status) {
+  return {
+    indexed: "Bereit",
+    pending: "Verarbeitung ausstehend",
+    error: "Fehler",
+    ocr_required: "OCR erforderlich",
+    missing: "Quelldatei fehlt",
+    source_file_missing: "Quelldatei fehlt",
+  }[String(status || "")] || "Unbekannt";
 }
 
 function smartHomeActionLabel(action) {
@@ -834,7 +927,7 @@ function renderPendingAction(action) {
   return wrapper;
 }
 
-function addChatMessage(role, message) {
+function addChatMessage(role, message, knowledgeSources = []) {
   if (!elements.chatLog) {
     return;
   }
@@ -850,6 +943,23 @@ function addChatMessage(role, message) {
     minute: "2-digit",
   });
   item.append(label, body, time);
+  if (role === "assistant" && Array.isArray(knowledgeSources) && knowledgeSources.length) {
+    const uniqueNames = [...new Set(knowledgeSources.map((source) => text(source?.name, "").trim()).filter(Boolean))];
+    if (uniqueNames.length) {
+      const sources = document.createElement("div");
+      sources.className = "knowledge-chat-sources";
+      const heading = document.createElement("strong");
+      heading.textContent = "Quellen:";
+      const list = document.createElement("ul");
+      for (const name of uniqueNames) {
+        const source = document.createElement("li");
+        source.textContent = name;
+        list.appendChild(source);
+      }
+      sources.append(heading, list);
+      item.appendChild(sources);
+    }
+  }
   elements.chatLog.appendChild(item);
   elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
 }
@@ -919,7 +1029,7 @@ async function sendChatMessage(textValue) {
     updateActivity(chatActivityId, { detail: "Antwort wird angezeigt." });
     setText("jarvisAnswer", answer);
     setVoiceStatus("Antwort empfangen.");
-    addChatMessage("assistant", answer);
+    addChatMessage("assistant", answer, response.knowledge_sources || []);
     if (speechOutputEnabled) {
       speakAnswer(answer);
     } else {
@@ -2468,6 +2578,7 @@ async function refreshKnowledge() {
     const status = await fetchJson("/assistant/knowledge/status");
     const documents = await fetchJson("/assistant/knowledge/documents");
     setText("knowledgeStatus", `${status.document_count ?? 0} Dokument(e), ${status.chunk_count ?? 0} Chunk(s).`);
+    setText("knowledgeSupportedFormats", `Unterstützt: ${(status.supported_extensions || []).join(", ") || "-"}. Maximales Uploadlimit: ${status.max_upload_mb ?? "-"} MB.`);
     renderList(elements.knowledgeDocuments, documents.documents || [], renderKnowledgeDocument, "Keine Dokumente indexiert.");
   } catch (error) {
     setText("knowledgeStatus", "Wissensspeicher konnte nicht geladen werden.");
@@ -2500,6 +2611,1069 @@ async function indexKnowledgePath() {
     await refreshKnowledge();
   } catch (error) {
     setText("knowledgeStatus", "Indexierung fehlgeschlagen.");
+  }
+}
+
+async function analyzeProToolCsv() {
+  const filePath = text(elements.protoolFilePath?.value, "").trim();
+  const textColumn = Number.parseInt(elements.protoolTextColumn?.value || "2", 10);
+  if (!selectedProToolFile && !filePath) {
+    setProToolError("Bitte einen lokalen CSV-Dateipfad eingeben oder eine CSV-Datei auswaehlen.");
+    return;
+  }
+  if (!Number.isInteger(textColumn) || textColumn < 1) {
+    setProToolError("Die Textspalte muss eine Zahl groesser oder gleich 1 sein.");
+    return;
+  }
+  if (selectedProToolFile) {
+    return analyzeSelectedProToolFile(textColumn);
+  }
+  return analyzeProToolPath(filePath, textColumn);
+}
+
+async function analyzeProToolPath(filePath, textColumn) {
+  setText("protoolStatus", "ProTool-CSV wird analysiert...");
+  clearProToolReport();
+  try {
+    const response = await fetch("/assistant/protool/analyze", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file_path: filePath,
+        panel: elements.protoolPanel.value,
+        text_column: textColumn,
+        encoding: elements.protoolEncoding.value,
+        include_preview: Boolean(elements.protoolIncludePreview?.checked),
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw createProToolHttpError(response.status, payload);
+    }
+    renderProToolReport(payload);
+    if (elements.protoolIncludePreview?.checked) {
+      openProToolPanelWindow(payload);
+    }
+  } catch (error) {
+    setProToolError(proToolErrorMessage(error));
+  }
+}
+
+async function analyzeSelectedProToolFile(textColumn) {
+  setText("protoolStatus", "Ausgewaehlte ProTool-CSV wird hochgeladen und analysiert...");
+  clearProToolReport();
+  const formData = new FormData();
+  formData.append("file", selectedProToolFile, selectedProToolFile.name);
+  formData.append("panel", elements.protoolPanel.value);
+  formData.append("text_column", String(textColumn));
+  formData.append("encoding", elements.protoolEncoding.value);
+  formData.append("include_preview", String(Boolean(elements.protoolIncludePreview?.checked)));
+  try {
+    const response = await fetch("/assistant/protool/upload-analyze", {
+      method: "POST",
+      cache: "no-store",
+      body: formData,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw createProToolHttpError(response.status, payload);
+    }
+    renderProToolReport(payload);
+    if (elements.protoolIncludePreview?.checked) {
+      openProToolPanelWindow(payload);
+    }
+  } catch (error) {
+    setProToolError(proToolErrorMessage(error));
+  }
+}
+
+async function analyzeProToolBatch() {
+  const filePaths = parseProToolBatchPaths();
+  const textColumn = Number.parseInt(elements.protoolTextColumn?.value || "2", 10);
+  if (!filePaths.length) {
+    setProToolError("Bitte mindestens einen CSV-Dateipfad fuer die Batch-Analyse eingeben.");
+    return;
+  }
+  if (!Number.isInteger(textColumn) || textColumn < 1) {
+    setProToolError("Die Textspalte muss eine Zahl groesser oder gleich 1 sein.");
+    return;
+  }
+
+  setText("protoolStatus", "ProTool-Projekt wird analysiert...");
+  clearProToolReport();
+  try {
+    const response = await fetch("/assistant/protool/analyze-batch", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file_paths: filePaths,
+        panel: elements.protoolPanel.value,
+        text_column: textColumn,
+        encoding: elements.protoolEncoding.value,
+        include_preview: Boolean(elements.protoolIncludePreview?.checked),
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw createProToolHttpError(response.status, payload);
+    }
+    renderProToolBatchReport(payload);
+  } catch (error) {
+    setProToolError(proToolErrorMessage(error));
+  }
+}
+
+function parseProToolBatchPaths() {
+  return text(elements.protoolBatchFilePaths?.value, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function createProToolHttpError(status, payload) {
+  const error = new Error(text(payload?.detail, `HTTP ${status}`));
+  error.status = status;
+  return error;
+}
+
+function proToolErrorMessage(error) {
+  if (error?.status === 404) {
+    return `Datei nicht gefunden: ${text(error.message, "Der angegebene Pfad wurde nicht gefunden.")}`;
+  }
+  if (error?.status === 400) {
+    return `Eingabe ungueltig: ${text(error.message, "Bitte Dateipfad, Panel, Textspalte und Encoding pruefen.")}`;
+  }
+  if (error?.status) {
+    return `Serverfehler bei der ProTool-Analyse: HTTP ${error.status}`;
+  }
+  return "ProTool-Analyse fehlgeschlagen. Bitte Backend und Eingaben pruefen.";
+}
+
+function setProToolError(message) {
+  setText("protoolStatus", message);
+  clearProToolReport();
+}
+
+function clearProToolReport() {
+  if (elements.protoolSummary) {
+    elements.protoolSummary.textContent = "";
+  }
+  if (elements.protoolIssuesBody) {
+    elements.protoolIssuesBody.textContent = "";
+  }
+  if (elements.protoolProjectSummary) {
+    elements.protoolProjectSummary.textContent = "";
+  }
+  if (elements.protoolFileReports) {
+    elements.protoolFileReports.textContent = "";
+  }
+  if (elements.protoolNoIssues) {
+    elements.protoolNoIssues.hidden = true;
+  }
+}
+
+function renderProToolReport(report) {
+  setText("protoolStatus", `${report.issues?.length ?? 0} Issue(s) gefunden.`);
+  if (elements.protoolProjectSummary) {
+    elements.protoolProjectSummary.textContent = "";
+  }
+  if (elements.protoolFileReports) {
+    elements.protoolFileReports.textContent = "";
+  }
+  renderProToolSummary(report);
+  renderProToolIssues(report.issues || []);
+  renderProToolPreviews(elements.protoolFileReports, report.previews || []);
+}
+
+function renderProToolSummary(report) {
+  if (!elements.protoolSummary) {
+    return;
+  }
+  elements.protoolSummary.textContent = "";
+  const entries = [
+    ["Datei", report.file],
+    ["Panel", report.panel],
+    ["Encoding", report.encoding],
+    ["Delimiter", report.delimiter],
+    ["rows", report.rows],
+    ["checked_rows", report.checked_rows],
+    ["Issues", report.issues?.length ?? 0],
+  ];
+  for (const [label, value] of entries) {
+    const group = document.createElement("div");
+    const term = document.createElement("dt");
+    const detail = document.createElement("dd");
+    term.textContent = label;
+    detail.textContent = text(value);
+    group.append(term, detail);
+    elements.protoolSummary.appendChild(group);
+  }
+}
+
+function renderProToolBatchReport(batchReport) {
+  const files = batchReport.files || [];
+  const totalIssues = batchReport.summary?.total_issues ?? 0;
+  setText("protoolStatus", `${files.length} Datei(en) analysiert, ${totalIssues} Issue(s) gefunden.`);
+  renderProToolProjectSummary(batchReport.summary || {});
+  if (elements.protoolSummary) {
+    elements.protoolSummary.textContent = "";
+  }
+  if (elements.protoolIssuesBody) {
+    elements.protoolIssuesBody.textContent = "";
+  }
+  if (elements.protoolNoIssues) {
+    elements.protoolNoIssues.hidden = totalIssues !== 0;
+  }
+  renderProToolFileReports(files);
+}
+
+function renderProToolProjectSummary(summary) {
+  if (!elements.protoolProjectSummary) {
+    return;
+  }
+  elements.protoolProjectSummary.textContent = "";
+  const entries = [
+    ["Dateien", summary.file_count],
+    ["Gesamtzeilen", summary.total_rows],
+    ["Gepruefte Textzeilen", summary.total_checked_rows],
+    ["Gesamtprobleme", summary.total_issues],
+  ];
+  for (const [label, value] of entries) {
+    const group = document.createElement("div");
+    const term = document.createElement("dt");
+    const detail = document.createElement("dd");
+    term.textContent = label;
+    detail.textContent = text(value);
+    group.append(term, detail);
+    elements.protoolProjectSummary.appendChild(group);
+  }
+}
+
+function renderProToolFileReports(files) {
+  if (!elements.protoolFileReports) {
+    return;
+  }
+  elements.protoolFileReports.textContent = "";
+  for (const fileReport of files) {
+    elements.protoolFileReports.appendChild(renderProToolFileReport(fileReport));
+  }
+}
+
+function renderProToolFileReport(report) {
+  const wrapper = document.createElement("section");
+  wrapper.className = "protool-file-report";
+  const title = document.createElement("h3");
+  title.textContent = report.file || "ProTool CSV";
+  wrapper.appendChild(title);
+  wrapper.appendChild(createProToolSummaryList(report));
+  const previewRows = getProToolPreviewRows(report);
+  if (previewRows.length) {
+    const button = document.createElement("button");
+    button.className = "ghost-button";
+    button.type = "button";
+    button.textContent = "Panel öffnen";
+    button.addEventListener("click", () => openProToolPanelWindow(report));
+    wrapper.appendChild(button);
+  }
+  wrapper.appendChild(createProToolIssueTable(report.issues || []));
+  renderProToolPreviews(wrapper, report.previews || []);
+  return wrapper;
+}
+
+function createProToolSummaryList(report) {
+  const summary = document.createElement("dl");
+  summary.className = "protool-summary";
+  const entries = [
+    ["Panel", report.panel],
+    ["Encoding", report.encoding],
+    ["Delimiter", report.delimiter],
+    ["rows", report.rows],
+    ["checked_rows", report.checked_rows],
+    ["Issues", report.issues?.length ?? 0],
+  ];
+  for (const [label, value] of entries) {
+    const group = document.createElement("div");
+    const term = document.createElement("dt");
+    const detail = document.createElement("dd");
+    term.textContent = label;
+    detail.textContent = text(value);
+    group.append(term, detail);
+    summary.appendChild(group);
+  }
+  return summary;
+}
+
+function createProToolIssueTable(issues) {
+  const table = document.createElement("table");
+  table.className = "protool-issues-table";
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["row", "type", "line", "max", "actual", "text"]) {
+    const cell = document.createElement("th");
+    cell.textContent = label;
+    headRow.appendChild(cell);
+  }
+  head.appendChild(headRow);
+  const body = document.createElement("tbody");
+  for (const issue of issues) {
+    body.appendChild(createProToolIssueRow(issue));
+  }
+  table.append(head, body);
+  if (!issues.length) {
+    const caption = document.createElement("caption");
+    caption.textContent = "Keine Probleme gefunden.";
+    table.appendChild(caption);
+  }
+  return table;
+}
+
+function renderProToolIssues(issues) {
+  if (!elements.protoolIssuesBody) {
+    return;
+  }
+  elements.protoolIssuesBody.textContent = "";
+  if (!issues.length) {
+    if (elements.protoolNoIssues) {
+      elements.protoolNoIssues.hidden = false;
+    }
+    return;
+  }
+  if (elements.protoolNoIssues) {
+    elements.protoolNoIssues.hidden = true;
+  }
+  for (const issue of issues) {
+    elements.protoolIssuesBody.appendChild(createProToolIssueRow(issue));
+  }
+}
+
+function createProToolIssueRow(issue) {
+  const row = document.createElement("tr");
+  for (const key of ["row", "type", "line", "max", "actual", "text"]) {
+    const cell = document.createElement("td");
+    cell.textContent = text(issue?.[key], "");
+    row.appendChild(cell);
+  }
+  return row;
+}
+
+function renderProToolPreviews(target, previews) {
+  if (!target || !previews.length) {
+    return;
+  }
+  const list = document.createElement("div");
+  list.className = "protool-preview-list";
+  for (const preview of previews) {
+    const item = document.createElement("div");
+    item.className = "protool-preview";
+    const label = document.createElement("strong");
+    label.textContent = `Zeile ${text(preview.row)}${preview.truncated ? " | abgeschnitten" : ""}`;
+    const block = document.createElement("pre");
+    block.textContent = (preview.preview || []).join("\n");
+    item.append(label, block);
+    list.appendChild(item);
+  }
+  target.appendChild(list);
+}
+
+function getProToolPreviewRows(report) {
+  return report?.preview_rows || report?.previews || [];
+}
+
+function openProToolPanelWindow(report) {
+  const previewRows = getProToolPreviewRows(report);
+  const panelWindow = window.open("", "_blank", "width=760,height=560,noopener=false");
+  if (!panelWindow) {
+    setText("protoolStatus", "Panel-Vorschaufenster konnte nicht geöffnet werden.");
+    return;
+  }
+  const panelDocument = panelWindow.document;
+  panelDocument.open();
+  panelDocument.write("<!doctype html><html lang=\"de\"><head><meta charset=\"UTF-8\"><title>ProTool Panel-Vorschau</title></head><body></body></html>");
+  panelDocument.close();
+  buildProToolPanelWindow(panelDocument, report, previewRows);
+}
+
+function buildProToolPanelWindow(panelDocument, report, previewRows) {
+  if (report?.panel === "OP7") {
+    buildProToolOp7PanelWindow(panelDocument, report, previewRows);
+    return;
+  }
+  buildGenericProToolPanelWindow(panelDocument, report, previewRows);
+}
+
+function buildProToolOp7PanelWindow(panelDocument, report, previewRows) {
+  const dimensions = PROTOOL_PANEL_DIMENSIONS.OP7;
+  const style = panelDocument.createElement("style");
+  style.textContent = `
+    body {
+      margin: 0;
+      background: #101316;
+      color: #e6edf2;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+    .shell {
+      min-height: 100vh;
+      padding: 24px;
+      background:
+        radial-gradient(circle at 50% 18%, rgba(190, 220, 80, 0.14), transparent 34%),
+        linear-gradient(145deg, #0b0f13, #161b20 55%, #080a0c);
+    }
+    .op7-stage {
+      display: grid;
+      justify-items: center;
+      gap: 14px;
+    }
+    .meta, .status, .controls, .zoom-controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      color: #d4dee8;
+    }
+    .op7-scale {
+      transform: scale(var(--op7-zoom, 1));
+      transform-origin: top center;
+      transition: transform 140ms ease;
+    }
+    .op7-case {
+      width: 620px;
+      border-radius: 24px;
+      padding: 24px 28px 28px;
+      background:
+        linear-gradient(145deg, #4c535a 0%, #2e343a 42%, #171b20 100%);
+      border: 2px solid #6d747a;
+      box-shadow:
+        0 28px 90px rgba(0, 0, 0, 0.58),
+        inset 0 1px 0 rgba(255, 255, 255, 0.16),
+        inset 0 -24px 48px rgba(0, 0, 0, 0.28);
+    }
+    .op7-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 18px;
+      color: #f4f8fb;
+      letter-spacing: 0.03em;
+    }
+    .op7-brand {
+      font-size: 28px;
+      font-weight: 900;
+    }
+    .op7-model {
+      text-align: right;
+      font-size: 18px;
+      font-weight: 800;
+    }
+    .op7-leds {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+      margin-top: 8px;
+      font-size: 11px;
+      color: #cbd4dc;
+    }
+    .op7-led {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .op7-led::before {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      content: "";
+      background: #273035;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.7);
+    }
+    .op7-led.run::before {
+      background: #39d353;
+      box-shadow: 0 0 12px rgba(57, 211, 83, 0.8);
+    }
+    .op7-led.stop::before {
+      background: #3a2422;
+    }
+    .op7-led.sf::before {
+      background: #4a2e17;
+    }
+    .op7-display-frame {
+      border-radius: 12px;
+      padding: 16px;
+      background: #111518;
+      border: 2px solid #07090b;
+      box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.75);
+    }
+    .op7-lcd {
+      display: grid;
+      gap: 5px;
+      border: 3px solid #2c3215;
+      border-radius: 7px;
+      padding: 16px 18px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 24%),
+        #becf62;
+      color: #17210c;
+      font-family: Consolas, "Courier New", monospace;
+      box-shadow: inset 0 0 22px rgba(35, 48, 12, 0.55);
+    }
+    .op7-lcd-row {
+      display: grid;
+      grid-template-columns: repeat(20, 1ch);
+      font-size: 25px;
+      line-height: 1.16;
+      white-space: pre;
+    }
+    .op7-lcd-char {
+      display: inline-block;
+      width: 1ch;
+      text-align: center;
+    }
+    .op7-keyboard {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .op7-key {
+      min-height: 38px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(180deg, #3e464d, #171c21);
+      border: 1px solid #69737c;
+      color: #edf4f8;
+      font-weight: 800;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 4px 8px rgba(0, 0, 0, 0.35);
+    }
+    .op7-control-grid {
+      display: grid;
+      grid-template-columns: 1fr 120px 1fr;
+      gap: 18px;
+      margin-top: 16px;
+      align-items: center;
+    }
+    .op7-nav-cluster {
+      display: grid;
+      grid-template-columns: repeat(3, 42px);
+      grid-template-rows: repeat(3, 34px);
+      justify-content: center;
+      gap: 5px;
+    }
+    .op7-nav-cluster .up { grid-column: 2; }
+    .op7-nav-cluster .left { grid-column: 1; grid-row: 2; }
+    .op7-nav-cluster .right { grid-column: 3; grid-row: 2; }
+    .op7-nav-cluster .down { grid-column: 2; grid-row: 3; }
+    button {
+      border: 1px solid #8fa15c;
+      border-radius: 5px;
+      padding: 9px 12px;
+      background: #1d252a;
+      color: #eef7df;
+      cursor: pointer;
+    }
+    .screenshot-mode .op7-stage > .meta,
+    .screenshot-mode .op7-stage > .status,
+    .screenshot-mode .op7-stage > .controls,
+    .screenshot-mode .op7-stage > .zoom-controls {
+      display: none;
+    }
+    .notice {
+      border: 1px solid #d1b24a;
+      padding: 14px;
+      color: #ffeaa0;
+      background: rgba(209, 178, 74, 0.12);
+    }
+  `;
+  panelDocument.head.appendChild(style);
+
+  const shell = panelDocument.createElement("main");
+  shell.className = "shell";
+  const stage = panelDocument.createElement("section");
+  stage.className = "op7-stage";
+  shell.appendChild(stage);
+
+  if (!previewRows.length) {
+    const notice = panelDocument.createElement("p");
+    notice.className = "notice";
+    notice.textContent = "Keine Panel-Vorschau im Report vorhanden. Bitte Checkbox 'Panel-Vorschau anzeigen' aktivieren.";
+    stage.appendChild(notice);
+    panelDocument.body.appendChild(shell);
+    return;
+  }
+
+  let index = 0;
+  const meta = panelDocument.createElement("div");
+  meta.className = "meta";
+  const status = panelDocument.createElement("div");
+  status.className = "status";
+  const scaleWrapper = panelDocument.createElement("div");
+  scaleWrapper.className = "op7-scale";
+  scaleWrapper.style.setProperty("--op7-zoom", "1");
+  const op7Case = panelDocument.createElement("div");
+  op7Case.className = "op7-case";
+  const header = panelDocument.createElement("div");
+  header.className = "op7-header";
+  const brand = panelDocument.createElement("div");
+  brand.className = "op7-brand";
+  brand.textContent = "SIEMENS";
+  const modelBlock = panelDocument.createElement("div");
+  modelBlock.className = "op7-model";
+  const model = panelDocument.createElement("div");
+  model.textContent = "SIMATIC OP7";
+  const leds = panelDocument.createElement("div");
+  leds.className = "op7-leds";
+  for (const [label, className] of [["RUN", "run"], ["STOP", "stop"], ["SF", "sf"]]) {
+    const led = panelDocument.createElement("span");
+    led.className = `op7-led ${className}`;
+    led.textContent = label;
+    leds.appendChild(led);
+  }
+  modelBlock.append(model, leds);
+  header.append(brand, modelBlock);
+
+  const displayFrame = panelDocument.createElement("div");
+  displayFrame.className = "op7-display-frame";
+  const lcd = panelDocument.createElement("div");
+  lcd.className = "op7-lcd";
+  displayFrame.appendChild(lcd);
+
+  const functionKeys = panelDocument.createElement("div");
+  functionKeys.className = "op7-keyboard";
+  for (const label of ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"]) {
+    functionKeys.appendChild(createOp7Key(panelDocument, label));
+  }
+
+  const controlGrid = panelDocument.createElement("div");
+  controlGrid.className = "op7-control-grid";
+  controlGrid.appendChild(createOp7Key(panelDocument, "ESC"));
+  const navCluster = panelDocument.createElement("div");
+  navCluster.className = "op7-nav-cluster";
+  for (const [label, className] of [["↑", "up"], ["←", "left"], ["→", "right"], ["↓", "down"]]) {
+    const key = createOp7Key(panelDocument, label);
+    key.classList.add(className);
+    navCluster.appendChild(key);
+  }
+  controlGrid.appendChild(navCluster);
+  controlGrid.appendChild(createOp7Key(panelDocument, "ENTER"));
+
+  op7Case.append(header, displayFrame, functionKeys, controlGrid);
+  scaleWrapper.appendChild(op7Case);
+
+  const controls = panelDocument.createElement("div");
+  controls.className = "controls";
+  const previousButton = panelDocument.createElement("button");
+  previousButton.type = "button";
+  previousButton.textContent = "Vorherige";
+  const nextButton = panelDocument.createElement("button");
+  nextButton.type = "button";
+  nextButton.textContent = "Nächste";
+  const screenshotButton = panelDocument.createElement("button");
+  screenshotButton.type = "button";
+  screenshotButton.textContent = "Screenshot vorbereiten";
+  controls.append(previousButton, nextButton, screenshotButton);
+
+  const zoomControls = createProToolZoomControls(panelDocument, scaleWrapper);
+
+  function renderPanelPreview() {
+    const current = previewRows[index];
+    meta.textContent = `CSV-Zeile ${current.row ?? "-"} / ${previewRows.length} | Datei: ${report.file || "-"}`;
+    const statusParts = [current.truncated ? "Text abgeschnitten" : "OK"];
+    if ((current.placeholders || []).length) {
+      statusParts.push("Platzhalter vorhanden");
+    }
+    status.textContent = `Status: ${statusParts.join(" | ")}`;
+    lcd.textContent = "";
+    for (const line of normalizePanelPreviewLines(current.preview || [], dimensions)) {
+      const row = panelDocument.createElement("div");
+      row.className = "op7-lcd-row";
+      for (const char of line) {
+        const cell = panelDocument.createElement("span");
+        cell.className = "op7-lcd-char";
+        cell.textContent = char === " " ? "\u00a0" : char;
+        row.appendChild(cell);
+      }
+      lcd.appendChild(row);
+    }
+    previousButton.disabled = index === 0;
+    nextButton.disabled = index >= previewRows.length - 1;
+  }
+
+  previousButton.addEventListener("click", () => {
+    if (index > 0) {
+      index -= 1;
+      renderPanelPreview();
+    }
+  });
+  nextButton.addEventListener("click", () => {
+    if (index < previewRows.length - 1) {
+      index += 1;
+      renderPanelPreview();
+    }
+  });
+  screenshotButton.addEventListener("click", () => {
+    panelDocument.body.classList.toggle("screenshot-mode");
+  });
+  panelDocument.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowLeft") {
+      previousButton.click();
+    }
+    if (event.key === "ArrowRight") {
+      nextButton.click();
+    }
+  });
+
+  stage.append(meta, status, scaleWrapper, zoomControls, controls);
+  panelDocument.body.appendChild(shell);
+  renderPanelPreview();
+}
+
+function createOp7Key(panelDocument, label) {
+  const key = panelDocument.createElement("div");
+  key.className = "op7-key";
+  key.textContent = label;
+  return key;
+}
+
+function createProToolZoomControls(panelDocument, target) {
+  const wrapper = panelDocument.createElement("div");
+  wrapper.className = "zoom-controls";
+  for (const [label, scale] of [["75 %", "0.75"], ["100 %", "1"], ["150 %", "1.5"], ["200 %", "2"]]) {
+    const button = panelDocument.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", () => target.style.setProperty("--op7-zoom", scale));
+    wrapper.appendChild(button);
+  }
+  return wrapper;
+}
+
+function buildGenericProToolPanelWindow(panelDocument, report, previewRows) {
+  const dimensions = PROTOOL_PANEL_DIMENSIONS[report?.panel] || inferProToolPreviewDimensions(previewRows);
+  const style = panelDocument.createElement("style");
+  style.textContent = `
+    body {
+      margin: 0;
+      background: #080b0d;
+      color: #d7f8c8;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+    .shell {
+      min-height: 100vh;
+      padding: 24px;
+      background: radial-gradient(circle at center, rgba(161, 255, 88, 0.12), transparent 48%), #080b0d;
+    }
+    .panel-case {
+      max-width: 680px;
+      margin: 0 auto;
+      border: 12px solid #171b20;
+      border-radius: 18px;
+      padding: 20px;
+      background: linear-gradient(145deg, #242a30, #0f1318);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55), inset 0 0 30px rgba(255, 255, 255, 0.04);
+    }
+    .lcd {
+      display: grid;
+      gap: 4px;
+      border: 4px solid #0b0f0a;
+      border-radius: 8px;
+      padding: 14px;
+      background: #b8cf63;
+      color: #14230c;
+      box-shadow: inset 0 0 22px rgba(0, 0, 0, 0.42);
+      font-family: Consolas, "Courier New", monospace;
+    }
+    .lcd-row {
+      display: grid;
+      grid-template-columns: repeat(var(--columns), 1ch);
+      gap: 0;
+      font-size: ${dimensions.columns > 20 ? "17px" : "24px"};
+      line-height: 1.2;
+      white-space: pre;
+    }
+    .lcd-char {
+      display: inline-block;
+      width: 1ch;
+      text-align: center;
+    }
+    .meta, .status, .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 12px 0;
+      color: #d7f8c8;
+    }
+    button {
+      border: 1px solid #8fbf50;
+      border-radius: 4px;
+      padding: 9px 12px;
+      background: #202821;
+      color: #e9ffd8;
+      cursor: pointer;
+    }
+    .notice {
+      border: 1px solid #d1b24a;
+      padding: 14px;
+      color: #ffeaa0;
+      background: rgba(209, 178, 74, 0.12);
+    }
+  `;
+  panelDocument.head.appendChild(style);
+
+  const shell = panelDocument.createElement("main");
+  shell.className = "shell";
+  const panel = panelDocument.createElement("section");
+  panel.className = "panel-case";
+  const title = panelDocument.createElement("h1");
+  title.textContent = "ProTool Panel-Vorschau";
+  panel.appendChild(title);
+
+  if (!previewRows.length) {
+    const notice = panelDocument.createElement("p");
+    notice.className = "notice";
+    notice.textContent = "Keine Panel-Vorschau im Report vorhanden. Bitte Checkbox 'Panel-Vorschau anzeigen' aktivieren.";
+    panel.appendChild(notice);
+    shell.appendChild(panel);
+    panelDocument.body.appendChild(shell);
+    return;
+  }
+
+  let index = 0;
+  const meta = panelDocument.createElement("div");
+  meta.className = "meta";
+  const status = panelDocument.createElement("div");
+  status.className = "status";
+  const lcd = panelDocument.createElement("div");
+  lcd.className = "lcd";
+  lcd.style.setProperty("--columns", String(dimensions.columns));
+  const controls = panelDocument.createElement("div");
+  controls.className = "controls";
+  const previousButton = panelDocument.createElement("button");
+  previousButton.type = "button";
+  previousButton.textContent = "Vorherige";
+  const nextButton = panelDocument.createElement("button");
+  nextButton.type = "button";
+  nextButton.textContent = "Nächste";
+  controls.append(previousButton, nextButton);
+
+  function renderPanelPreview() {
+    const current = previewRows[index];
+    meta.textContent = `Panel: ${report.panel || "-"} | Datei: ${report.file || "-"} | CSV-Zeile: ${current.row ?? "-"}`;
+    const statusParts = [current.truncated ? "truncated" : "OK"];
+    if ((current.placeholders || []).length) {
+      statusParts.push("Placeholder vorhanden");
+    }
+    status.textContent = `Status: ${statusParts.join(" | ")}`;
+    lcd.textContent = "";
+    for (const line of normalizePanelPreviewLines(current.preview || [], dimensions)) {
+      const row = panelDocument.createElement("div");
+      row.className = "lcd-row";
+      for (const char of line) {
+        const cell = panelDocument.createElement("span");
+        cell.className = "lcd-char";
+        cell.textContent = char === " " ? "\u00a0" : char;
+        row.appendChild(cell);
+      }
+      lcd.appendChild(row);
+    }
+    previousButton.disabled = index === 0;
+    nextButton.disabled = index >= previewRows.length - 1;
+  }
+
+  previousButton.addEventListener("click", () => {
+    if (index > 0) {
+      index -= 1;
+      renderPanelPreview();
+    }
+  });
+  nextButton.addEventListener("click", () => {
+    if (index < previewRows.length - 1) {
+      index += 1;
+      renderPanelPreview();
+    }
+  });
+  panelDocument.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowLeft") {
+      previousButton.click();
+    }
+    if (event.key === "ArrowRight") {
+      nextButton.click();
+    }
+  });
+
+  panel.append(meta, status, lcd, controls);
+  shell.appendChild(panel);
+  panelDocument.body.appendChild(shell);
+  renderPanelPreview();
+}
+
+function inferProToolPreviewDimensions(previewRows) {
+  const firstPreview = previewRows?.[0]?.preview || [];
+  return {
+    rows: Math.max(firstPreview.length || 4, 4),
+    columns: Math.max(...firstPreview.map((line) => String(line).length), 20),
+  };
+}
+
+function normalizePanelPreviewLines(lines, dimensions) {
+  const normalized = [];
+  for (const line of lines.slice(0, dimensions.rows)) {
+    normalized.push(String(line).slice(0, dimensions.columns).padEnd(dimensions.columns, " "));
+  }
+  while (normalized.length < dimensions.rows) {
+    normalized.push(" ".repeat(dimensions.columns));
+  }
+  return normalized;
+}
+
+function knowledgeErrorMessage(reason, fallback = "Die Dokumentverarbeitung ist fehlgeschlagen.") {
+  return {
+    invalid_filename: "Der Dateiname ist ungültig.",
+    unsupported_extension: "Dieser Dateityp wird nicht unterstützt.",
+    unsupported_file_type: "Dieser Dateityp wird nicht unterstützt.",
+    empty_file: "Die Datei ist leer.",
+    file_too_large: "Die Datei überschreitet das erlaubte Größenlimit.",
+    invalid_pdf_header: "Die Datei ist kein gültiges PDF.",
+    ocr_required: "Das PDF enthält keinen extrahierbaren Text. OCR wird noch nicht unterstützt.",
+    upload_write_failed: "Die Datei konnte lokal nicht gespeichert werden.",
+    index_write_failed: "Der Wissensindex konnte nicht aktualisiert werden.",
+    index_recovery_failed: "Der lokale Wissensindex muss überprüft werden.",
+  }[String(reason || "")] || fallback;
+}
+
+function renderKnowledgeUploadQueue(items) {
+  renderList(elements.knowledgeUploadQueue, items, (item) => {
+    const wrapper = document.createElement("span");
+    wrapper.textContent = `${item.name}: ${item.status}`;
+    if (item.message) {
+      const detail = document.createElement("div");
+      detail.className = "muted";
+      detail.textContent = item.message;
+      wrapper.appendChild(detail);
+    }
+    return wrapper;
+  }, "");
+}
+
+async function uploadKnowledgeFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  const queue = files.map((file) => ({ name: file.name, status: "wird hochgeladen", message: "" }));
+  renderKnowledgeUploadQueue(queue);
+  setText("knowledgeUploadSummary", `0 von ${files.length} Dateien verarbeitet.`);
+  const activityId = `knowledge-upload-${Date.now()}`;
+  startActivity(activityId, `${files.length} Dokument(e) werden hochgeladen`, {
+    category: "knowledge",
+    detail: "Lokale Uploads werden verarbeitet.",
+    progress: `0 von ${files.length} Dateien verarbeitet`,
+  });
+  try {
+    const formData = new FormData();
+    for (const file of files) formData.append("files", file, file.name);
+    for (const item of queue) item.status = "wird verarbeitet";
+    renderKnowledgeUploadQueue(queue);
+    const response = await fetch("/assistant/knowledge/upload", { method: "POST", body: formData, cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(knowledgeErrorMessage(data?.detail?.reason, "Upload konnte nicht ausgeführt werden."));
+    const byName = new Map(queue.map((item) => [item.name, item]));
+    for (const document of data.documents || []) {
+      const item = byName.get(document.original_name || document.name);
+      if (!item) continue;
+      item.status = document.duplicate ? "Duplikat" : document.extraction_status === "ocr_required" ? "OCR erforderlich" : "bereit";
+      item.message = document.duplicate ? "Bereits vorhanden." : document.extraction_status === "ocr_required" ? knowledgeErrorMessage("ocr_required") : "Lokal gespeichert und indexiert.";
+    }
+    for (const error of data.errors || []) {
+      const item = byName.get(error.filename || error.name);
+      if (!item) continue;
+      item.status = "Fehler";
+      item.message = knowledgeErrorMessage(error.reason, error.message);
+    }
+    renderKnowledgeUploadQueue(queue);
+    const complete = Number(data.success_count || 0) + Number(data.failed_count || 0);
+    setText("knowledgeUploadSummary", `${complete} von ${files.length} Dateien verarbeitet.`);
+    finishActivity(activityId, `${data.success_count || 0} Dokument(e) verarbeitet.`);
+    await refreshKnowledge();
+  } catch (error) {
+    for (const item of queue) {
+      if (item.status !== "bereit" && item.status !== "Duplikat" && item.status !== "OCR erforderlich") {
+        item.status = "Fehler";
+        item.message = "Die Datei konnte nicht zum lokalen Wissensspeicher hochgeladen werden.";
+      }
+    }
+    renderKnowledgeUploadQueue(queue);
+    setText("knowledgeUploadSummary", "Upload fehlgeschlagen.");
+    failActivity(activityId, "Dokument-Upload fehlgeschlagen.");
+  } finally {
+    if (elements.knowledgeFileInput) elements.knowledgeFileInput.value = "";
+  }
+}
+
+async function reindexKnowledgeDocument(document, button) {
+  if (!document?.document_id || knowledgeBusyDocumentIds.has(document.document_id)) return;
+  knowledgeBusyDocumentIds.add(document.document_id);
+  if (button) button.disabled = true;
+  const activityId = `knowledge-reindex-${document.document_id}`;
+  startActivity(activityId, "Dokument wird neu indexiert", { category: "knowledge", detail: "Wird neu indexiert ..." });
+  try {
+    const response = await fetch(`/assistant/knowledge/documents/${encodeURIComponent(document.document_id)}/reindex`, { method: "POST", cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(knowledgeErrorMessage(data?.detail?.reason));
+    const detail = data.document?.extraction_status === "ocr_required"
+      ? "Das Dokument wurde geprüft, benötigt aber lokale OCR-Unterstützung."
+      : "Dokument wurde neu indexiert.";
+    setText("knowledgeUploadSummary", detail);
+    finishActivity(activityId, detail);
+    await refreshKnowledge();
+  } catch (error) {
+    setText("knowledgeUploadSummary", "Dokument konnte nicht neu indexiert werden.");
+    failActivity(activityId, "Neuindexierung fehlgeschlagen.");
+  } finally {
+    knowledgeBusyDocumentIds.delete(document.document_id);
+    if (button) button.disabled = false;
+  }
+}
+
+async function deleteKnowledgeDocument(document, button) {
+  if (!document?.document_id || knowledgeBusyDocumentIds.has(document.document_id)) return;
+  const detail = document.source_type === "upload"
+    ? "Die von Jarvis verwaltete lokale Kopie wird ebenfalls entfernt."
+    : "Die Originaldatei bleibt erhalten. Nur der Wissensindex wird entfernt.";
+  if (!window.confirm(`Soll dieses Dokument wirklich aus Jarvis’ Wissensspeicher entfernt werden?\n\n${detail}`)) return;
+  knowledgeBusyDocumentIds.add(document.document_id);
+  if (button) button.disabled = true;
+  const activityId = `knowledge-delete-${document.document_id}`;
+  startActivity(activityId, "Dokument wird entfernt", { category: "knowledge", detail: "Wird entfernt ..." });
+  try {
+    const response = await fetch(`/assistant/knowledge/documents/${encodeURIComponent(document.document_id)}`, { method: "DELETE", cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(knowledgeErrorMessage(data?.detail?.reason));
+    const message = data.cleanup_pending
+      ? "Dokument entfernt. Die lokale Bereinigung wird abgeschlossen."
+      : data.physical_file_deleted
+        ? "Dokument und verwaltete lokale Kopie wurden entfernt."
+        : "Dokument wurde aus dem Wissensspeicher entfernt.";
+    setText("knowledgeUploadSummary", message);
+    clearList(elements.knowledgeResults);
+    finishActivity(activityId, message);
+    await refreshKnowledge();
+  } catch (error) {
+    setText("knowledgeUploadSummary", "Dokument konnte nicht entfernt werden.");
+    failActivity(activityId, "Entfernen fehlgeschlagen.");
+  } finally {
+    knowledgeBusyDocumentIds.delete(document.document_id);
+    if (button) button.disabled = false;
+  }
+}
+
+async function showKnowledgeDetails(document) {
+  if (!document?.document_id) return;
+  try {
+    const data = await fetchJson(`/assistant/knowledge/documents/${encodeURIComponent(document.document_id)}`);
+    const previews = (data.chunks || data.chunk_previews || []).map((chunk) => chunk.preview).filter(Boolean);
+    setText("knowledgeUploadSummary", previews.length ? previews.join(" | ") : "Keine Chunk-Vorschau verfügbar.");
+  } catch (error) {
+    setText("knowledgeUploadSummary", "Dokumentdetails konnten nicht geladen werden.");
   }
 }
 
@@ -2817,6 +3991,24 @@ function wireDashboardEvents() {
     }
   });
   elements.refreshKnowledge.addEventListener("click", () => withButtonLoading(elements.refreshKnowledge, "Lade...", refreshKnowledge));
+  elements.knowledgeSelectFilesButton?.addEventListener("click", () => elements.knowledgeFileInput?.click());
+  elements.knowledgeFileInput?.addEventListener("change", () => uploadKnowledgeFiles(elements.knowledgeFileInput.files));
+  elements.knowledgeDropZone?.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    elements.knowledgeDropZone.classList.add("is-dragging");
+  });
+  elements.knowledgeDropZone?.addEventListener("dragleave", () => elements.knowledgeDropZone.classList.remove("is-dragging"));
+  elements.knowledgeDropZone?.addEventListener("drop", (event) => {
+    event.preventDefault();
+    elements.knowledgeDropZone.classList.remove("is-dragging");
+    uploadKnowledgeFiles(event.dataTransfer?.files);
+  });
+  elements.knowledgeDropZone?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      elements.knowledgeFileInput?.click();
+    }
+  });
   elements.knowledgeSearchButton.addEventListener("click", () => withButtonLoading(elements.knowledgeSearchButton, "Suche...", searchKnowledge));
   elements.knowledgeIndexButton.addEventListener("click", () => withButtonLoading(elements.knowledgeIndexButton, "Indexiere...", indexKnowledgePath));
   elements.knowledgeSearchInput.addEventListener("keydown", (event) => {
@@ -2827,6 +4019,34 @@ function wireDashboardEvents() {
   elements.knowledgeIndexInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       withButtonLoading(elements.knowledgeIndexButton, "Indexiere...", indexKnowledgePath);
+    }
+  });
+  elements.protoolAnalyzeButton?.addEventListener("click", () => withButtonLoading(elements.protoolAnalyzeButton, "Analysiere...", analyzeProToolCsv));
+  elements.protoolBatchAnalyzeButton?.addEventListener("click", () => withButtonLoading(elements.protoolBatchAnalyzeButton, "Analysiere Batch...", analyzeProToolBatch));
+  elements.protoolFilePath?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      withButtonLoading(elements.protoolAnalyzeButton, "Analysiere...", analyzeProToolCsv);
+    }
+  });
+  elements.protoolFilePath?.addEventListener("input", () => {
+    if (text(elements.protoolFilePath?.value, "").trim()) {
+      selectedProToolFile = null;
+      if (elements.protoolFilePicker) {
+        elements.protoolFilePicker.value = "";
+      }
+      setText("protoolSelectedFileName", "Ausgewählte Datei: -");
+    }
+  });
+  elements.protoolBrowseButton?.addEventListener("click", () => elements.protoolFilePicker?.click());
+  elements.protoolFilePicker?.addEventListener("change", () => {
+    const selectedFile = elements.protoolFilePicker.files?.[0];
+    selectedProToolFile = selectedFile || null;
+    if (elements.protoolFilePath) {
+      elements.protoolFilePath.value = "";
+    }
+    setText("protoolSelectedFileName", selectedFile ? `Ausgewählte Datei: ${selectedFile.name}` : "Ausgewählte Datei: -");
+    if (selectedFile) {
+      setText("protoolStatus", "Datei ausgewählt. Die Analyse wird per Upload ausgeführt.");
     }
   });
   elements.refreshActions.addEventListener("click", () => withButtonLoading(elements.refreshActions, "Lade...", refreshActions));
