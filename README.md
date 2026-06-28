@@ -8,6 +8,15 @@ Version 0.1 verbindet sich mit Home Assistant ueber die REST API und stellt loka
 Das Projekt soll lokale Assistant-Funktionen bereitstellen, ohne Cloud-Deployment, Docker, Datenbank, Voice-Control oder autonome Aktionen.
 In v0.1 gibt es einfache regelbasierte Chat-Kommandos und Home-Assistant-Werkzeuge fuer Statusabfragen, Suche, Energie-/Leistungswerte und bestaetigungspflichtiges Schalten.
 
+## Projekt-Dokumentation
+
+- [Vision](VISION.md)
+- [Changelog](CHANGELOG.md)
+- [Architektur](docs/architecture/README.md)
+- [Roadmap](docs/roadmap/README.md)
+
+Der ProTool Assistant ist das erste read-only Engineering-Modul von HammerJarvis. Er analysiert ProTool-CSV-Dateien, erstellt Reports und Panel-Vorschauen, veraendert aber keine CSV- oder Projektdateien.
+
 ## Voraussetzungen
 
 - Windows
