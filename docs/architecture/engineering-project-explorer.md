@@ -113,3 +113,6 @@ Der Object Graph wird im ersten Schritt nur mit `Project`- und `ProjectFile`-Nod
 - Browser-Pfadlimits verhindern echte lokale Pfadauswahl; manuelle Pfade oder Backend-gestuetzte Auswahl bleiben notwendig.
 - OneDrive- oder Netzlaufwerk-Platzhalter koennen scheinbar vorhandene Dateien liefern, die lokal nicht lesbar sind.
 
+## Implemented v1
+
+Der erste Project-Explorer-Skeleton enthaelt einen read-only `ProjectScanner`, einen dateinamenbasierten `ProToolClassifier`, eine `ProjectImporter`-Pipeline und einen JSON-kompatiblen `EngineeringTreeBuilder`. Erkannte Projektdateien werden als `ProjectFile`-Objekte und `ProjectFile`-GraphNodes importiert; CSV-Inhalte werden noch nicht geparst. Die API kann erlaubte Projektpfade oeffnen und Projekt, Baum und Dateiliste bereitstellen. Das Dashboard kann einen Projektpfad laden und den Project Explorer dynamisch anzeigen.

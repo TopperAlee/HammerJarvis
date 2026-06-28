@@ -1,0 +1,73 @@
+from dataclasses import dataclass
+
+from hammer_jarvis.engineering.classifier.protool import ProjectFileType, ProToolClassifier
+from hammer_jarvis.engineering.graph import EngineeringGraph, GraphEdge, GraphNode
+from hammer_jarvis.engineering.models import Project, ProjectFile
+from hammer_jarvis.engineering.scanner.filesystem import ProjectScanResult
+
+
+@dataclass
+class ImportedProject:
+    project: Project
+    graph: EngineeringGraph
+
+
+class ProjectImporter:
+    def __init__(self, classifier: ProToolClassifier | None = None) -> None:
+        self.classifier = classifier or ProToolClassifier()
+
+    def import_scan(self, scan_result: ProjectScanResult) -> ImportedProject:
+        project_id = _project_id(scan_result.root_path.name)
+        project_node = GraphNode(
+            id=f"project:{project_id}",
+            type="Project",
+            name=scan_result.root_path.name,
+            source_file=str(scan_result.root_path),
+            metadata={"root_path": str(scan_result.root_path)},
+        )
+        project_files: list[ProjectFile] = []
+        nodes = [project_node]
+        edges: list[GraphEdge] = []
+
+        for scanned_file in sorted(scan_result.files, key=lambda item: item.relative_path.lower()):
+            file_type = self.classifier.classify(scanned_file.path)
+            module = "protool" if file_type is not ProjectFileType.UNKNOWN else None
+            project_file = ProjectFile(
+                name=scanned_file.path.name,
+                path=str(scanned_file.path),
+                kind=file_type.value,
+                module=module,
+            )
+            project_files.append(project_file)
+            file_node = GraphNode(
+                id=f"file:{project_id}:{scanned_file.relative_path}",
+                type="ProjectFile",
+                name=scanned_file.path.name,
+                source_file=str(scanned_file.path),
+                metadata={
+                    "relative_path": scanned_file.relative_path,
+                    "kind": file_type.value,
+                    "module": module,
+                },
+            )
+            nodes.append(file_node)
+            edges.append(
+                GraphEdge(
+                    source_id=project_node.id,
+                    target_id=file_node.id,
+                    type="CONTAINS",
+                    metadata={"source": "project_importer"},
+                )
+            )
+
+        return ImportedProject(
+            project=Project(id=project_id, name=scan_result.root_path.name, files=project_files),
+            graph=EngineeringGraph(nodes=nodes, edges=edges),
+        )
+
+
+def _project_id(name: str) -> str:
+    normalized = "".join(character.lower() if character.isalnum() else "-" for character in name)
+    normalized = "-".join(part for part in normalized.split("-") if part)
+    return normalized or "engineering-project"
+

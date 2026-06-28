@@ -60,7 +60,10 @@ from app.tools.productivity.providers.timetree_provider import TimeTreeProvider
 from app.tools.web.web_research_tool import WebResearchTool, get_web_research_status
 from hammer_jarvis.engineering.demo import get_demo_projects
 from hammer_jarvis.engineering.graph import EngineeringGraph, GraphBuilder, GraphNode
+from hammer_jarvis.engineering.importer.project_importer import ImportedProject, ProjectImporter
 from hammer_jarvis.engineering.plugins import get_engineering_modules
+from hammer_jarvis.engineering.scanner.filesystem import ProjectScanner
+from hammer_jarvis.engineering.tree import EngineeringTreeBuilder
 from hammer_jarvis.tools.protool.report import analyze_protool_csv
 
 
@@ -71,6 +74,7 @@ _watcher_scheduler: Any = None
 _ha_entity_scheduler: Any = None
 _last_native_benchmark: dict[str, Any] | None = None
 _last_native_warm_benchmark: dict[str, Any] | None = None
+_engineering_project_store: dict[str, ImportedProject] = {}
 
 
 @app.on_event("startup")
@@ -220,6 +224,10 @@ class KnowledgeIndexRequest(BaseModel):
     recursive: bool = True
 
 
+class EngineeringOpenProjectRequest(BaseModel):
+    path: str = Field(min_length=1)
+
+
 class ProToolAnalyzeRequest(BaseModel):
     file_path: str = Field(min_length=1)
     panel: str = Field(min_length=1)
@@ -282,6 +290,20 @@ def _node_payload(node: GraphNode | None) -> dict[str, Any]:
     if node is None:
         raise HTTPException(status_code=404, detail="Engineering graph node not found.")
     return asdict(node)
+
+
+def _imported_project_payload(imported: ImportedProject) -> dict[str, Any]:
+    return {
+        "project": asdict(imported.project),
+        "graph": _graph_payload(imported.graph),
+    }
+
+
+def _get_imported_project(project_id: str) -> ImportedProject:
+    imported = _engineering_project_store.get(project_id)
+    if imported is None:
+        raise HTTPException(status_code=404, detail="Engineering project not found.")
+    return imported
 
 
 class EntityActionRequest(BaseModel):
@@ -953,7 +975,43 @@ def assistant_engineering_modules() -> list[dict[str, str]]:
 
 @app.get("/assistant/engineering/projects")
 def assistant_engineering_projects() -> list[dict[str, Any]]:
-    return get_demo_projects()
+    imported_projects = [asdict(imported.project) for imported in _engineering_project_store.values()]
+    return get_demo_projects() + imported_projects
+
+
+@app.post("/assistant/engineering/projects/open")
+def assistant_engineering_open_project(request: EngineeringOpenProjectRequest) -> dict[str, Any]:
+    try:
+        scan_result = ProjectScanner().scan(request.path)
+        imported = ProjectImporter().import_scan(scan_result)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _engineering_project_store[imported.project.id] = imported
+    return {
+        "project_id": imported.project.id,
+        "project_name": imported.project.name,
+        "file_count": len(imported.project.files),
+    }
+
+
+@app.get("/assistant/engineering/projects/{project_id}")
+def assistant_engineering_project(project_id: str) -> dict[str, Any]:
+    return _imported_project_payload(_get_imported_project(project_id))
+
+
+@app.get("/assistant/engineering/projects/{project_id}/tree")
+def assistant_engineering_project_tree(project_id: str) -> dict[str, Any]:
+    imported = _get_imported_project(project_id)
+    return EngineeringTreeBuilder().build(imported.project)
+
+
+@app.get("/assistant/engineering/projects/{project_id}/files")
+def assistant_engineering_project_files(project_id: str) -> dict[str, Any]:
+    imported = _get_imported_project(project_id)
+    return {"project_id": project_id, "files": [asdict(project_file) for project_file in imported.project.files]}
 
 
 @app.get("/assistant/engineering/graph/projects/{project_id}")

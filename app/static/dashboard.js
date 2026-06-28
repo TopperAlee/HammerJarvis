@@ -256,6 +256,9 @@ function bindElements() {
     "protoolIssuesBody",
     "protoolFileReports",
     "engineeringModules",
+    "engineeringProjectPath",
+    "engineeringOpenProject",
+    "engineeringProjectStatus",
     "engineeringProjectExplorer",
     "refreshActions",
     "pendingActions",
@@ -2616,6 +2619,62 @@ async function indexKnowledgePath() {
   }
 }
 
+async function openEngineeringProject() {
+  const path = text(elements.engineeringProjectPath?.value, "").trim();
+  if (!path) {
+    setText("engineeringProjectStatus", "Bitte einen Projektpfad eingeben.");
+    return;
+  }
+  try {
+    setText("engineeringProjectStatus", "Engineering-Projekt wird geladen...");
+    const opened = await postJson("/assistant/engineering/projects/open", { path });
+    setText("engineeringProjectStatus", `${opened.project_name || "Projekt"} geladen: ${opened.file_count ?? 0} Datei(en).`);
+    await refreshEngineeringProjectTree(opened.project_id);
+  } catch (error) {
+    setText("engineeringProjectStatus", "Engineering-Projekt konnte nicht geladen werden.");
+  }
+}
+
+async function refreshEngineeringProjectTree(projectId) {
+  if (!projectId) {
+    return;
+  }
+  try {
+    const tree = await fetchJson(`/assistant/engineering/projects/${encodeURIComponent(projectId)}/tree`);
+    renderEngineeringTree(tree);
+  } catch (error) {
+    setText("engineeringProjectStatus", "Projektbaum konnte nicht geladen werden.");
+  }
+}
+
+function renderEngineeringTree(tree) {
+  if (!elements.engineeringProjectExplorer) {
+    return;
+  }
+  elements.engineeringProjectExplorer.textContent = "";
+  elements.engineeringProjectExplorer.appendChild(renderEngineeringTreeNode(tree));
+}
+
+function renderEngineeringTreeNode(node) {
+  const item = document.createElement("li");
+  const label = document.createElement("button");
+  label.type = "button";
+  label.className = "engineering-tree-item";
+  label.textContent = node?.name || "Unbenannt";
+  if (node?.type === "ProjectFile") {
+    label.addEventListener("click", () => setText("engineeringProjectStatus", "Analyse verfügbar"));
+  }
+  item.appendChild(label);
+  if (Array.isArray(node?.children) && node.children.length) {
+    const children = document.createElement("ul");
+    for (const child of node.children) {
+      children.appendChild(renderEngineeringTreeNode(child));
+    }
+    item.appendChild(children);
+  }
+  return item;
+}
+
 async function analyzeProToolCsv() {
   const filePath = text(elements.protoolFilePath?.value, "").trim();
   const textColumn = Number.parseInt(elements.protoolTextColumn?.value || "2", 10);
@@ -4021,6 +4080,12 @@ function wireDashboardEvents() {
   elements.knowledgeIndexInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       withButtonLoading(elements.knowledgeIndexButton, "Indexiere...", indexKnowledgePath);
+    }
+  });
+  elements.engineeringOpenProject?.addEventListener("click", () => withButtonLoading(elements.engineeringOpenProject, "Lade...", openEngineeringProject));
+  elements.engineeringProjectPath?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      withButtonLoading(elements.engineeringOpenProject, "Lade...", openEngineeringProject);
     }
   });
   elements.protoolAnalyzeButton?.addEventListener("click", () => withButtonLoading(elements.protoolAnalyzeButton, "Analysiere...", analyzeProToolCsv));
