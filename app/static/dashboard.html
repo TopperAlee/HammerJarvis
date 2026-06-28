@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
-    <link rel="stylesheet" href="/static/dashboard.css?v=engineering-workspace-20260628">
+    <link rel="stylesheet" href="/static/dashboard.css?v=intent-engine-20260628">
   </head>
   <body>
     <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
@@ -57,6 +57,14 @@
 
         <section id="errorPanel" class="error-panel" hidden>
           Verbindung zum Hammer-Jarvis-Backend fehlgeschlagen.
+        </section>
+
+        <section id="commandCenter" class="command-center-panel" aria-label="Command Center">
+          <div>
+            <span class="muted">Command Center</span>
+            <strong id="commandPaletteStatus">Bereit für Intents.</strong>
+          </div>
+          <button id="openCommandPalette" class="ghost-button" type="button">Command Palette Ctrl+K</button>
         </section>
 
         <section id="activityPanel" class="activity-panel" role="status" aria-live="polite">
@@ -542,6 +550,19 @@
       </main>
     </div>
 
-    <script src="/static/dashboard.js?v=engineering-workspace-20260628" defer></script>
+    <div id="commandPalette" class="command-palette" hidden role="dialog" aria-modal="true" aria-labelledby="commandPaletteTitle">
+      <div class="command-palette-box">
+        <div class="panel-heading">
+          <span id="commandPaletteTitle">Command Palette</span>
+          <button id="closeCommandPalette" class="ghost-button small-action" type="button">Schließen</button>
+        </div>
+        <input id="commandPaletteInput" type="text" autocomplete="off" placeholder="Intent oder Befehl eingeben...">
+        <p class="muted">Tipp: Ctrl+K öffnet diese Palette.</p>
+        <p id="commandPaletteResult" class="muted">Noch kein Intent erkannt.</p>
+        <ul id="commandPaletteCommands" class="signal-list compact"></ul>
+      </div>
+    </div>
+
+    <script src="/static/dashboard.js?v=intent-engine-20260628" defer></script>
   </body>
 </html>

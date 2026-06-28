@@ -64,6 +64,11 @@ from hammer_jarvis.engineering.importer.project_importer import ImportedProject,
 from hammer_jarvis.engineering.plugins import get_engineering_modules
 from hammer_jarvis.engineering.scanner.filesystem import ProjectScanner
 from hammer_jarvis.engineering.tree import EngineeringTreeBuilder
+from hammer_jarvis.intent.capabilities import CapabilityRegistry
+from hammer_jarvis.intent.context import ContextStore
+from hammer_jarvis.intent.models import IntentRequest
+from hammer_jarvis.intent.parser import IntentParser
+from hammer_jarvis.intent.registry import get_commands
 from hammer_jarvis.tools.protool.report import analyze_protool_csv
 
 
@@ -75,6 +80,7 @@ _ha_entity_scheduler: Any = None
 _last_native_benchmark: dict[str, Any] | None = None
 _last_native_warm_benchmark: dict[str, Any] | None = None
 _engineering_project_store: dict[str, ImportedProject] = {}
+_intent_context_store = ContextStore()
 
 
 @app.on_event("startup")
@@ -966,6 +972,37 @@ def assistant_file_open(request: FileOpenRequest) -> dict[str, Any]:
 @app.post("/assistant/files/open-latest")
 def assistant_file_open_latest() -> dict[str, Any]:
     return FileOpenTool().open_latest_export()
+
+
+@app.post("/assistant/intent/parse")
+def assistant_intent_parse(request: IntentRequest) -> dict[str, Any]:
+    current_context = _intent_context_store.get().model_dump()
+    merged_context = {**current_context, **request.context}
+    result = IntentParser().parse_text(request.text, source=request.source, context=merged_context)
+    _intent_context_store.update({"last_intent": result.intent})
+    if result.intent == "knowledge.search":
+        _intent_context_store.update({"last_search_query": request.text})
+    return result.model_dump()
+
+
+@app.get("/assistant/context")
+def assistant_context() -> dict[str, Any]:
+    return _intent_context_store.get().model_dump()
+
+
+@app.post("/assistant/context/reset")
+def assistant_context_reset() -> dict[str, Any]:
+    return _intent_context_store.reset().model_dump()
+
+
+@app.get("/assistant/commands")
+def assistant_commands() -> list[dict[str, object]]:
+    return get_commands()
+
+
+@app.get("/assistant/capabilities")
+def assistant_capabilities() -> list[dict[str, Any]]:
+    return [capability.model_dump() for capability in CapabilityRegistry().list()]
 
 
 @app.get("/assistant/engineering/modules")

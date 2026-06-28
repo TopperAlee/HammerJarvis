@@ -1,0 +1,118 @@
+from hammer_jarvis.intent.models import Capability
+
+
+CAPABILITIES = [
+    Capability(
+        id="engineering.workspace",
+        name="Engineering Workspace",
+        module="engineering",
+        plugin=None,
+        status="implemented",
+        implemented_since="v0.4.1",
+        gui_available=True,
+        api_available=True,
+        voice_ready=False,
+        risk_level="GREEN",
+        read_only=True,
+    ),
+    Capability(
+        id="engineering.project.explorer",
+        name="Engineering Project Explorer",
+        module="engineering",
+        plugin=None,
+        status="implemented",
+        implemented_since="v0.5.0",
+        gui_available=True,
+        api_available=True,
+        voice_ready=False,
+        risk_level="GREEN",
+        read_only=True,
+    ),
+    Capability(
+        id="engineering.protool.analyze",
+        name="ProTool CSV Analyse",
+        module="engineering",
+        plugin="protool",
+        status="implemented",
+        implemented_since="v0.3.1",
+        gui_available=True,
+        api_available=True,
+        voice_ready=False,
+        risk_level="GREEN",
+        read_only=True,
+    ),
+    Capability(
+        id="engineering.protool.preview",
+        name="ProTool Panel Preview",
+        module="engineering",
+        plugin="protool",
+        status="implemented",
+        implemented_since="v0.3.1",
+        gui_available=True,
+        api_available=True,
+        voice_ready=False,
+        risk_level="GREEN",
+        read_only=True,
+    ),
+    Capability(
+        id="engineering.object_graph",
+        name="Engineering Object Graph",
+        module="engineering",
+        plugin=None,
+        status="implemented",
+        implemented_since="v0.4.1",
+        gui_available=False,
+        api_available=True,
+        voice_ready=False,
+        risk_level="GREEN",
+        read_only=True,
+    ),
+    Capability(
+        id="knowledge.search",
+        name="Knowledge Search",
+        module="knowledge",
+        plugin=None,
+        status="implemented",
+        implemented_since="v0.3.1",
+        gui_available=True,
+        api_available=True,
+        voice_ready=False,
+        risk_level="GREEN",
+        read_only=True,
+    ),
+    Capability(
+        id="assistant.status",
+        name="Assistant Status",
+        module="assistant",
+        plugin=None,
+        status="implemented",
+        implemented_since="v0.1.0",
+        gui_available=True,
+        api_available=True,
+        voice_ready=True,
+        risk_level="GREEN",
+        read_only=True,
+    ),
+    Capability(
+        id="development.git.status",
+        name="Git Status",
+        module="development",
+        plugin=None,
+        status="planned",
+        implemented_since="",
+        gui_available=False,
+        api_available=False,
+        voice_ready=False,
+        risk_level="GREEN",
+        read_only=True,
+    ),
+]
+
+
+class CapabilityRegistry:
+    def list(self) -> list[Capability]:
+        return [capability.model_copy() for capability in CAPABILITIES]
+
+    def get(self, capability_id: str) -> Capability | None:
+        return next((capability.model_copy() for capability in CAPABILITIES if capability.id == capability_id), None)
+

@@ -250,6 +250,51 @@ h1 {
   color: var(--red);
 }
 
+.command-center-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(0, 229, 255, 0.22);
+  border-radius: 8px;
+  margin-top: 14px;
+  padding: 12px;
+  background: rgba(3, 12, 19, 0.72);
+}
+
+.command-center-panel strong {
+  display: block;
+  margin-top: 4px;
+}
+
+.command-palette {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: start center;
+  padding: 9vh 18px 18px;
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.command-palette[hidden] {
+  display: none;
+}
+
+.command-palette-box {
+  width: min(720px, 100%);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 16px;
+  background: rgba(3, 12, 19, 0.96);
+  box-shadow: 0 0 42px rgba(0, 229, 255, 0.18);
+}
+
+.command-palette-box input {
+  width: 100%;
+  margin: 12px 0;
+}
+
 .activity-panel {
   border: 1px solid rgba(0, 229, 255, 0.22);
   border-radius: 8px;

@@ -1,4 +1,4 @@
-const DASHBOARD_BUILD = "engineering-workspace-20260628";
+const DASHBOARD_BUILD = "intent-engine-20260628";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
 const fetchTimeoutMs = 15000;
@@ -238,6 +238,14 @@ function bindElements() {
     "knowledgeUploadQueue",
     "knowledgeUploadSummary",
     "knowledgeSupportedFormats",
+    "commandCenter",
+    "openCommandPalette",
+    "closeCommandPalette",
+    "commandPalette",
+    "commandPaletteInput",
+    "commandPaletteStatus",
+    "commandPaletteResult",
+    "commandPaletteCommands",
     "protoolFilePath",
     "protoolBrowseButton",
     "protoolFilePicker",
@@ -623,6 +631,63 @@ function renderList(target, items, renderer, emptyText = "Keine Einträge.") {
       item.textContent = rendered;
     }
     target.appendChild(item);
+  }
+}
+
+function openCommandPalette() {
+  if (!elements.commandPalette) {
+    return;
+  }
+  elements.commandPalette.hidden = false;
+  elements.commandPaletteInput?.focus();
+  refreshCommandPaletteCommands();
+}
+
+function closeCommandPalette() {
+  if (elements.commandPalette) {
+    elements.commandPalette.hidden = true;
+  }
+}
+
+async function parseCommandPaletteIntent() {
+  const value = text(elements.commandPaletteInput?.value, "").trim();
+  if (!value) {
+    setText("commandPaletteResult", "Bitte einen Befehl eingeben.");
+    return;
+  }
+  try {
+    const result = await postJson("/assistant/intent/parse", {
+      text: value,
+      source: "command_palette",
+      context: {},
+    });
+    const message = `${result.intent || "unknown"} · Risiko: ${result.risk || "-"} · ${result.message || ""}`;
+    setText("commandPaletteResult", message);
+    setText("commandPaletteStatus", message);
+  } catch (error) {
+    setText("commandPaletteResult", "Intent konnte nicht erkannt werden.");
+    setText("commandPaletteStatus", "Command Palette Fehler.");
+  }
+}
+
+async function refreshCommandPaletteCommands() {
+  if (!elements.commandPaletteCommands || elements.commandPaletteCommands.childElementCount > 0) {
+    return;
+  }
+  try {
+    const commands = await fetchJson("/assistant/commands");
+    renderList(elements.commandPaletteCommands, commands, (command) => {
+      const wrapper = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = command.label || command.intent || "Befehl";
+      const detail = document.createElement("div");
+      detail.className = "muted";
+      detail.textContent = Array.isArray(command.examples) ? command.examples.join(" · ") : "";
+      wrapper.append(title, detail);
+      return wrapper;
+    });
+  } catch (error) {
+    renderList(elements.commandPaletteCommands, [], () => "", "Befehle konnten nicht geladen werden.");
   }
 }
 
@@ -3935,6 +4000,25 @@ function wireEvents() {
 }
 
 function wireDashboardEvents() {
+  elements.openCommandPalette?.addEventListener("click", openCommandPalette);
+  elements.closeCommandPalette?.addEventListener("click", closeCommandPalette);
+  elements.commandPaletteInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      parseCommandPaletteIntent();
+    }
+    if (event.key === "Escape") {
+      closeCommandPalette();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.ctrlKey && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      openCommandPalette();
+    }
+    if (event.key === "Escape" && elements.commandPalette && !elements.commandPalette.hidden) {
+      closeCommandPalette();
+    }
+  });
   elements.sendCommand.addEventListener("click", () => withButtonLoading(
     elements.sendCommand,
     "Senden...",
