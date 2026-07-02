@@ -1,4 +1,4 @@
-const DASHBOARD_BUILD = "context-recommendations-20260628";
+const DASHBOARD_BUILD = "protool-importer-20260702";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
 const fetchTimeoutMs = 15000;
@@ -258,6 +258,7 @@ function bindElements() {
     "protoolIncludePreview",
     "protoolBatchFilePaths",
     "protoolAnalyzeButton",
+    "protoolImportButton",
     "protoolBatchAnalyzeButton",
     "protoolStatus",
     "protoolProjectSummary",
@@ -2914,6 +2915,47 @@ async function analyzeProToolBatch() {
   }
 }
 
+async function importProToolToGraph() {
+  const filePath = text(elements.protoolFilePath?.value, "").trim();
+  const textColumn = Number.parseInt(elements.protoolTextColumn?.value || "2", 10);
+  if (selectedProToolFile) {
+    setProToolError("Import in den Engineering Graph benötigt aktuell einen lokalen Dateipfad. Upload-Dateien können weiterhin analysiert werden.");
+    return;
+  }
+  if (!filePath) {
+    setProToolError("Bitte einen lokalen CSV-Dateipfad fuer den Import eingeben.");
+    return;
+  }
+  if (!Number.isInteger(textColumn) || textColumn < 1) {
+    setProToolError("Die Textspalte muss eine Zahl groesser oder gleich 1 sein.");
+    return;
+  }
+
+  setText("protoolStatus", "ProTool-CSV wird read-only in den Engineering Graph importiert...");
+  clearProToolReport();
+  try {
+    const response = await fetch("/assistant/protool/import", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file_path: filePath,
+        panel: elements.protoolPanel.value,
+        text_column: textColumn,
+        encoding: elements.protoolEncoding.value,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw createProToolHttpError(response.status, payload);
+    }
+    renderProToolImportResult(payload);
+    await refreshCommandCenter();
+  } catch (error) {
+    setProToolError(proToolErrorMessage(error));
+  }
+}
+
 function parseProToolBatchPaths() {
   return text(elements.protoolBatchFilePaths?.value, "")
     .split(/\r?\n/)
@@ -2957,6 +2999,31 @@ function clearProToolReport() {
   }
   if (elements.protoolFileReports) {
     elements.protoolFileReports.textContent = "";
+  }
+  if (elements.protoolNoIssues) {
+    elements.protoolNoIssues.hidden = true;
+  }
+}
+
+function renderProToolImportResult(importResult) {
+  const count = importResult.text_resource_count ?? 0;
+  setText("protoolStatus", `${count} ProTool-TextResource(s) in den Engineering Graph importiert.`);
+  if (elements.protoolSummary) {
+    elements.protoolSummary.textContent = "";
+    const entries = [
+      ["Datei", importResult.file],
+      ["Panel", importResult.panel],
+      ["TextResources", count],
+    ];
+    for (const [label, value] of entries) {
+      const group = document.createElement("div");
+      const term = document.createElement("dt");
+      const detail = document.createElement("dd");
+      term.textContent = label;
+      detail.textContent = text(value);
+      group.append(term, detail);
+      elements.protoolSummary.appendChild(group);
+    }
   }
   if (elements.protoolNoIssues) {
     elements.protoolNoIssues.hidden = true;
@@ -4236,6 +4303,7 @@ function wireDashboardEvents() {
     }
   });
   elements.protoolAnalyzeButton?.addEventListener("click", () => withButtonLoading(elements.protoolAnalyzeButton, "Analysiere...", analyzeProToolCsv));
+  elements.protoolImportButton?.addEventListener("click", () => withButtonLoading(elements.protoolImportButton, "Importiere...", importProToolToGraph));
   elements.protoolBatchAnalyzeButton?.addEventListener("click", () => withButtonLoading(elements.protoolBatchAnalyzeButton, "Analysiere Batch...", analyzeProToolBatch));
   elements.protoolFilePath?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {

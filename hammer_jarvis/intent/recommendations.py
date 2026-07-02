@@ -85,6 +85,19 @@ class RecommendationEngine:
                 )
             )
 
+        if context.current_task == "protool_texts_imported":
+            recommendations.append(
+                Recommendation(
+                    id="engineering.protool_texts_available",
+                    title="ProTool Texte im Graph verfügbar",
+                    message="Die ProTool-Texte wurden als Engineering-Objekte importiert und können nun über den Object Graph genutzt werden.",
+                    severity="info",
+                    source="engineering",
+                    intent="engineering.panel.preview",
+                    arguments={"file": context.active_file, "panel": context.active_panel},
+                )
+            )
+
         if self._knowledge_empty:
             recommendations.append(
                 Recommendation(

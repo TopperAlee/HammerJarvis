@@ -23,6 +23,8 @@ def test_dashboard_renders_protool_assistant_panel() -> None:
     assert 'id="protoolTextColumn"' in html
     assert 'id="protoolEncoding"' in html
     assert 'id="protoolAnalyzeButton"' in html
+    assert 'id="protoolImportButton"' in html
+    assert "In Engineering Graph importieren" in html
     assert "protool-panel" in css
     assert '"files chat protool"' in css
     assert '"protool"' in css
@@ -59,6 +61,14 @@ def test_dashboard_protool_manual_path_still_uses_analyze_endpoint() -> None:
     assert "if (selectedProToolFile)" in js
     assert "return analyzeSelectedProToolFile(textColumn);" in js
     assert "return analyzeProToolPath(filePath, textColumn);" in js
+
+
+def test_dashboard_protool_import_button_uses_import_endpoint() -> None:
+    _html, js, _css = _dashboard_files()
+
+    assert "importProToolToGraph" in js
+    assert 'fetch("/assistant/protool/import", {' in js
+    assert "renderProToolImportResult(payload)" in js
 
 
 def test_dashboard_renders_protool_batch_controls() -> None:

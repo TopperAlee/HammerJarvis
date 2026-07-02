@@ -61,6 +61,7 @@ from app.tools.web.web_research_tool import WebResearchTool, get_web_research_st
 from hammer_jarvis.engineering.demo import get_demo_projects
 from hammer_jarvis.engineering.graph import EngineeringGraph, GraphBuilder, GraphNode
 from hammer_jarvis.engineering.importer.project_importer import ImportedProject, ProjectImporter
+from hammer_jarvis.engineering.importer.protool_importer import ProToolImporter
 from hammer_jarvis.engineering.plugins import get_engineering_modules
 from hammer_jarvis.engineering.scanner.filesystem import ProjectScanner
 from hammer_jarvis.engineering.tree import EngineeringTreeBuilder
@@ -81,6 +82,7 @@ _ha_entity_scheduler: Any = None
 _last_native_benchmark: dict[str, Any] | None = None
 _last_native_warm_benchmark: dict[str, Any] | None = None
 _engineering_project_store: dict[str, ImportedProject] = {}
+_protool_text_resource_store: dict[str, dict[str, Any]] = {}
 _intent_context_store = ContextStore()
 
 
@@ -266,6 +268,13 @@ class ProToolAnalyzeBatchRequest(BaseModel):
     encoding: str = "cp1252"
     report_empty: bool = False
     include_preview: bool = False
+
+
+class ProToolImportRequest(BaseModel):
+    file_path: str = Field(min_length=1)
+    panel: str = Field(min_length=1)
+    text_column: int = Field(ge=1)
+    encoding: str = "cp1252"
 
 
 KNOWLEDGE_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
@@ -1199,6 +1208,58 @@ def assistant_protool_analyze_batch(request: ProToolAnalyzeBatchRequest) -> dict
             "total_issues": sum(len(report.get("issues") or []) for report in reports),
         },
     }
+
+
+@app.post("/assistant/protool/import")
+def assistant_protool_import(request: ProToolImportRequest) -> dict[str, Any]:
+    try:
+        result = ProToolImporter().import_file(
+            request.file_path,
+            panel=request.panel,
+            text_column=request.text_column,
+            encoding=request.encoding,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _replace_protool_text_store(result["text_resources"])
+    _intent_context_store.update(
+        {
+            "active_workspace": "engineering",
+            "active_file": request.file_path,
+            "active_file_type": "PROTOOL_TEXT_CSV",
+            "active_panel": request.panel,
+            "current_task": "protool_texts_imported",
+        }
+    )
+    return {
+        "file": result["file"],
+        "panel": result["panel"],
+        "text_resource_count": result["text_resource_count"],
+        "graph": _graph_payload(result["graph"]),
+    }
+
+
+@app.get("/assistant/protool/texts")
+def assistant_protool_texts() -> dict[str, Any]:
+    texts = list(_protool_text_resource_store.values())
+    return {"count": len(texts), "texts": texts}
+
+
+@app.get("/assistant/protool/text/{text_id}")
+def assistant_protool_text(text_id: str) -> dict[str, Any]:
+    text_resource = _protool_text_resource_store.get(text_id)
+    if text_resource is None:
+        raise HTTPException(status_code=404, detail="ProTool TextResource not found.")
+    return text_resource
+
+
+def _replace_protool_text_store(nodes: list[GraphNode]) -> None:
+    _protool_text_resource_store.clear()
+    for node in nodes:
+        _protool_text_resource_store[node.id] = asdict(node)
 
 
 @app.get("/assistant/web/status")

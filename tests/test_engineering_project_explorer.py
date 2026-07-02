@@ -87,6 +87,26 @@ def test_project_importer_builds_project_files_and_graph_nodes(tmp_path: Path, m
     assert all(node.type in {"Project", "ProjectFile"} for node in imported.graph.nodes)
 
 
+def test_project_importer_can_optionally_import_protool_text_resources(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "ProToolProject"
+    root.mkdir()
+    (root / "MessageText.csv").write_bytes("ID;Text\r\n1;Hydraulik bereit\r\n".encode("cp1252"))
+    monkeypatch.setenv("FILE_SEARCH_ALLOWED_DIRS", str(tmp_path))
+    scan_result = ProjectScanner(max_depth=2, max_files=20).scan(root)
+
+    imported = ProjectImporter().import_scan(
+        scan_result,
+        import_protool_texts=True,
+        panel="OP7",
+        text_column=2,
+        encoding="cp1252",
+    )
+
+    assert any(node.type == "ProjectFile" and node.name == "MessageText.csv" for node in imported.graph.nodes)
+    assert any(node.type == "TextResource" and node.metadata["text"] == "Hydraulik bereit" for node in imported.graph.nodes)
+    assert any(edge.type == "DEFINES" for edge in imported.graph.edges)
+
+
 def test_engineering_tree_builder_returns_json_compatible_tree(tmp_path: Path, monkeypatch) -> None:
     root = _project_dir(tmp_path)
     monkeypatch.setenv("FILE_SEARCH_ALLOWED_DIRS", str(tmp_path))
@@ -144,4 +164,3 @@ def test_dashboard_contains_project_explorer_open_controls() -> None:
     assert "Projekt laden" in html
     assert "/assistant/engineering/projects/open" in js
     assert "Analyse verfügbar" in js
-

@@ -115,6 +115,22 @@ def test_recommendation_engine_returns_contextual_engineering_recommendations() 
     assert "voice.check_status" in ids
 
 
+def test_recommendation_engine_mentions_imported_protool_texts() -> None:
+    context = ContextStore().update(
+        {
+            "active_workspace": "engineering",
+            "active_project_id": "project-1",
+            "active_file": "MessageText.csv",
+            "active_panel": "OP7",
+            "current_task": "protool_texts_imported",
+        }
+    )
+
+    recommendations = RecommendationEngine().build(context)
+
+    assert any(item.title == "ProTool Texte im Graph verfügbar" for item in recommendations)
+
+
 def test_intent_api_endpoints_return_expected_payloads() -> None:
     parse_response = client.post(
         "/assistant/intent/parse",

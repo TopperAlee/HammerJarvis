@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from hammer_jarvis.engineering.importer.protool_importer import ProToolImporter
 from hammer_jarvis.tools.protool.csv_reader import read_protool_csv
 from hammer_jarvis.tools.protool.report import analyze_protool_csv
 from hammer_jarvis.tools.protool.validator import validate_rows
@@ -12,11 +13,40 @@ from hammer_jarvis.tools.protool.validator import validate_rows
 client = TestClient(app)
 
 
+def test_protool_importer_imports_message_text_as_text_resources(tmp_path: Path) -> None:
+    csv_path = tmp_path / "MessageText.csv"
+    csv_path.write_bytes("ID;Text\r\n1;Hydraulik bereit %d\r\n2;123456789012345678901\r\n".encode("cp1252"))
+
+    result = ProToolImporter().import_file(csv_path, panel="OP7", text_column=2, encoding="cp1252")
+
+    assert result["text_resource_count"] == 2
+    text_nodes = [node for node in result["graph"].nodes if node.type == "TextResource"]
+    assert len(text_nodes) == 2
+    assert text_nodes[0].metadata["text"] == "Hydraulik bereit %d"
+    assert text_nodes[0].metadata["placeholders"] == ["%d"]
+    assert text_nodes[0].metadata["preview"][0] == "Hydraulik bereit %d "
+    assert text_nodes[1].metadata["truncated"] is True
+    assert any(edge.type == "DEFINES" and edge.target_id == text_nodes[0].id for edge in result["graph"].edges)
+
+
+def test_protool_importer_uses_stable_node_ids(tmp_path: Path) -> None:
+    csv_path = tmp_path / "MessageText.csv"
+    csv_path.write_bytes("ID;Text\r\n1;Hydraulik bereit\r\n".encode("cp1252"))
+
+    first = ProToolImporter().import_file(csv_path, panel="OP7", text_column=2, encoding="cp1252")
+    second = ProToolImporter().import_file(csv_path, panel="OP7", text_column=2, encoding="cp1252")
+
+    first_ids = [node.id for node in first["graph"].nodes]
+    second_ids = [node.id for node in second["graph"].nodes]
+    assert first_ids == second_ids
+
+
 def test_upload_analyze_endpoint_is_in_openapi() -> None:
     response = client.get("/openapi.json")
 
     assert response.status_code == 200
     assert "/assistant/protool/upload-analyze" in response.json()["paths"]
+    assert "/assistant/protool/import" in response.json()["paths"]
 
 
 def test_cp1252_csv_with_semicolon(tmp_path: Path) -> None:
@@ -162,6 +192,38 @@ def test_analyze_endpoint_returns_json_report(tmp_path: Path) -> None:
     assert report["rows"] == 2
     assert report["checked_rows"] == 2
     assert report["issues"][0]["type"] == "TEXT_TOO_LONG"
+
+
+def test_protool_import_endpoint_returns_graph_and_text_store(tmp_path: Path) -> None:
+    csv_path = tmp_path / "MessageText.csv"
+    csv_path.write_bytes("ID;Text\r\n1;Hydraulik bereit %d\r\n".encode("cp1252"))
+
+    response = client.post(
+        "/assistant/protool/import",
+        json={
+            "file_path": str(csv_path),
+            "panel": "OP7",
+            "text_column": 2,
+            "encoding": "cp1252",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["file"] == str(csv_path)
+    assert payload["panel"] == "OP7"
+    assert payload["text_resource_count"] == 1
+    text_nodes = [node for node in payload["graph"]["nodes"] if node["type"] == "TextResource"]
+    assert text_nodes[0]["metadata"]["placeholders"] == ["%d"]
+
+    texts_response = client.get("/assistant/protool/texts")
+    assert texts_response.status_code == 200
+    texts = texts_response.json()["texts"]
+    assert texts[0]["id"] == text_nodes[0]["id"]
+
+    text_response = client.get(f"/assistant/protool/text/{text_nodes[0]['id']}")
+    assert text_response.status_code == 200
+    assert text_response.json()["metadata"]["text"] == "Hydraulik bereit %d"
 
 
 def test_analyze_report_counts_only_checked_rows(tmp_path: Path) -> None:
