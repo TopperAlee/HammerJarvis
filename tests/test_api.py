@@ -234,8 +234,8 @@ def test_dashboard_build_marker_and_cache_busting_are_present() -> None:
     html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
     js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
 
-    assert 'src="/static/dashboard.js?v=intent-engine-20260628" defer' in html
-    assert 'const DASHBOARD_BUILD = "intent-engine-20260628"' in js
+    assert 'src="/static/dashboard.js?v=context-recommendations-20260628" defer' in html
+    assert 'const DASHBOARD_BUILD = "context-recommendations-20260628"' in js
     assert "dashboard.js geladen" in js
     assert "document.documentElement.dataset.dashboardBuild = DASHBOARD_BUILD" in js
     assert "Build: ${DASHBOARD_BUILD}" in js

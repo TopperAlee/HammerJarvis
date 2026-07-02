@@ -262,9 +262,51 @@ h1 {
   background: rgba(3, 12, 19, 0.72);
 }
 
+.command-center-main {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
 .command-center-panel strong {
   display: block;
   margin-top: 4px;
+}
+
+.command-center-insights {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.command-center-insights h2 {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.recommendation-badge {
+  display: inline-block;
+  margin-left: 6px;
+  border: 1px solid rgba(0, 229, 255, 0.28);
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--cyan);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.recommendation-badge.severity-warning {
+  border-color: rgba(255, 176, 32, 0.55);
+  color: var(--amber);
+}
+
+.recommendation-badge.severity-critical {
+  border-color: rgba(255, 77, 77, 0.55);
+  color: var(--red);
 }
 
 .command-palette {

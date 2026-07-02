@@ -38,10 +38,13 @@ class ContextState(BaseModel):
     active_workspace: str | None = None
     active_project_id: str | None = None
     active_project_name: str | None = None
+    active_project_path: str | None = None
     active_file: str | None = None
+    active_file_type: str | None = None
     active_panel: str | None = None
     active_language: str | None = None
     last_intent: str | None = None
     last_search_query: str | None = None
+    last_selected_node: str | None = None
     current_task: str | None = None
-
+    updated_at: str | None = None

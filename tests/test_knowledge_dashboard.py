@@ -87,8 +87,8 @@ def test_knowledge_dashboard_preserves_voice_and_desktop_event_hooks_without_new
 def test_dashboard_uses_knowledge_ingestion_cache_busting_value() -> None:
     html, js, _css = _dashboard_files()
 
-    assert "intent-engine-20260628" in html
-    assert 'const DASHBOARD_BUILD = "intent-engine-20260628";' in js
+    assert "context-recommendations-20260628" in html
+    assert 'const DASHBOARD_BUILD = "context-recommendations-20260628";' in js
 
 
 def test_knowledge_panel_has_a_reachable_grid_area_after_actions_are_split() -> None:

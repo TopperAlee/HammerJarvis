@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
-    <link rel="stylesheet" href="/static/dashboard.css?v=intent-engine-20260628">
+    <link rel="stylesheet" href="/static/dashboard.css?v=context-recommendations-20260628">
   </head>
   <body>
     <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
@@ -60,9 +60,21 @@
         </section>
 
         <section id="commandCenter" class="command-center-panel" aria-label="Command Center">
-          <div>
-            <span class="muted">Command Center</span>
-            <strong id="commandPaletteStatus">Bereit für Intents.</strong>
+          <div class="command-center-main">
+            <div>
+              <span class="muted">Command Center</span>
+              <strong id="commandPaletteStatus">Bereit für Intents.</strong>
+            </div>
+            <div class="command-center-insights" aria-label="Kontext und Empfehlungen">
+              <section>
+                <h2>Aktiver Kontext</h2>
+                <ul id="activeContextList" class="signal-list compact"></ul>
+              </section>
+              <section>
+                <h2>Empfehlungen</h2>
+                <ul id="recommendationsList" class="signal-list compact"></ul>
+              </section>
+            </div>
           </div>
           <button id="openCommandPalette" class="ghost-button" type="button">Command Palette Ctrl+K</button>
         </section>
@@ -563,6 +575,6 @@
       </div>
     </div>
 
-    <script src="/static/dashboard.js?v=intent-engine-20260628" defer></script>
+    <script src="/static/dashboard.js?v=context-recommendations-20260628" defer></script>
   </body>
 </html>

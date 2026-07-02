@@ -68,6 +68,7 @@ from hammer_jarvis.intent.capabilities import CapabilityRegistry
 from hammer_jarvis.intent.context import ContextStore
 from hammer_jarvis.intent.models import IntentRequest
 from hammer_jarvis.intent.parser import IntentParser
+from hammer_jarvis.intent.recommendations import RecommendationEngine
 from hammer_jarvis.intent.registry import get_commands
 from hammer_jarvis.tools.protool.report import analyze_protool_csv
 
@@ -232,6 +233,21 @@ class KnowledgeIndexRequest(BaseModel):
 
 class EngineeringOpenProjectRequest(BaseModel):
     path: str = Field(min_length=1)
+
+
+class ContextUpdateRequest(BaseModel):
+    active_workspace: str | None = None
+    active_project_id: str | None = None
+    active_project_name: str | None = None
+    active_project_path: str | None = None
+    active_file: str | None = None
+    active_file_type: str | None = None
+    active_panel: str | None = None
+    active_language: str | None = None
+    last_intent: str | None = None
+    last_search_query: str | None = None
+    last_selected_node: str | None = None
+    current_task: str | None = None
 
 
 class ProToolAnalyzeRequest(BaseModel):
@@ -990,9 +1006,30 @@ def assistant_context() -> dict[str, Any]:
     return _intent_context_store.get().model_dump()
 
 
+@app.post("/assistant/context/update")
+def assistant_context_update(request: ContextUpdateRequest) -> dict[str, Any]:
+    patch = request.model_dump(exclude_unset=True)
+    return _intent_context_store.update(patch).model_dump()
+
+
 @app.post("/assistant/context/reset")
 def assistant_context_reset() -> dict[str, Any]:
     return _intent_context_store.reset().model_dump()
+
+
+@app.get("/assistant/recommendations")
+def assistant_recommendations() -> list[dict[str, Any]]:
+    context = _intent_context_store.get()
+    knowledge_empty = _is_knowledge_empty()
+    recommendations = RecommendationEngine(knowledge_empty=knowledge_empty, voice_ready=False).build(context)
+    return [recommendation.model_dump() for recommendation in recommendations]
+
+
+def _is_knowledge_empty() -> bool:
+    try:
+        return int(KnowledgeStore().status().get("document_count", 0)) == 0
+    except Exception:
+        return False
 
 
 @app.get("/assistant/commands")
@@ -1027,6 +1064,14 @@ def assistant_engineering_open_project(request: EngineeringOpenProjectRequest) -
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     _engineering_project_store[imported.project.id] = imported
+    _intent_context_store.update(
+        {
+            "active_workspace": "engineering",
+            "active_project_id": imported.project.id,
+            "active_project_name": imported.project.name,
+            "active_project_path": request.path,
+        }
+    )
     return {
         "project_id": imported.project.id,
         "project_name": imported.project.name,

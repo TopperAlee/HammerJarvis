@@ -1,4 +1,4 @@
-const DASHBOARD_BUILD = "intent-engine-20260628";
+const DASHBOARD_BUILD = "context-recommendations-20260628";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
 const fetchTimeoutMs = 15000;
@@ -246,6 +246,8 @@ function bindElements() {
     "commandPaletteStatus",
     "commandPaletteResult",
     "commandPaletteCommands",
+    "activeContextList",
+    "recommendationsList",
     "protoolFilePath",
     "protoolBrowseButton",
     "protoolFilePicker",
@@ -664,6 +666,7 @@ async function parseCommandPaletteIntent() {
     const message = `${result.intent || "unknown"} · Risiko: ${result.risk || "-"} · ${result.message || ""}`;
     setText("commandPaletteResult", message);
     setText("commandPaletteStatus", message);
+    await refreshCommandCenter();
   } catch (error) {
     setText("commandPaletteResult", "Intent konnte nicht erkannt werden.");
     setText("commandPaletteStatus", "Command Palette Fehler.");
@@ -689,6 +692,66 @@ async function refreshCommandPaletteCommands() {
   } catch (error) {
     renderList(elements.commandPaletteCommands, [], () => "", "Befehle konnten nicht geladen werden.");
   }
+}
+
+async function refreshCommandCenter() {
+  await Promise.all([
+    refreshActiveContext(),
+    refreshRecommendations(),
+  ]);
+}
+
+async function refreshActiveContext() {
+  if (!elements.activeContextList) {
+    return;
+  }
+  try {
+    const context = await fetchJson("/assistant/context");
+    const rows = [
+      ["Workspace", context.active_workspace],
+      ["Projekt", context.active_project_name || context.active_project_id],
+      ["Datei", context.active_file],
+      ["Dateityp", context.active_file_type],
+      ["Panel", context.active_panel],
+      ["Sprache", context.active_language],
+      ["Aufgabe", context.current_task],
+    ].filter(([, value]) => Boolean(value));
+    renderList(
+      elements.activeContextList,
+      rows,
+      ([label, value]) => `${label}: ${value}`,
+      "Kein aktiver Kontext.",
+    );
+  } catch (error) {
+    renderList(elements.activeContextList, [], () => "", "Kontext konnte nicht geladen werden.");
+  }
+}
+
+async function refreshRecommendations() {
+  if (!elements.recommendationsList) {
+    return;
+  }
+  try {
+    const recommendations = await fetchJson("/assistant/recommendations");
+    renderList(
+      elements.recommendationsList,
+      recommendations,
+      renderRecommendation,
+      "Keine Empfehlungen.",
+    );
+  } catch (error) {
+    renderList(elements.recommendationsList, [], () => "", "Empfehlungen konnten nicht geladen werden.");
+  }
+}
+
+function renderRecommendation(recommendation) {
+  const wrapper = document.createElement("span");
+  wrapper.textContent = `${recommendation.title || "Empfehlung"}: ${recommendation.message || ""}`;
+  const badge = document.createElement("small");
+  badge.className = `recommendation-badge severity-${recommendation.severity || "info"}`;
+  badge.textContent = recommendation.severity || "info";
+  wrapper.append(" ", badge);
+  return wrapper;
 }
 
 function appendCode(parent, value) {
@@ -4231,6 +4294,7 @@ function initializeRemainingDashboardSafely() {
     connectDesktopEventBridge();
     updateClock();
     refreshDashboard();
+    refreshCommandCenter();
     window.setInterval(updateClock, 1000);
     window.setInterval(refreshDashboard, refreshMs);
   } catch (error) {
