@@ -1,4 +1,4 @@
-const DASHBOARD_BUILD = "protool-importer-20260702";
+const DASHBOARD_BUILD = "topbar-navigation-20260702";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
 const fetchTimeoutMs = 15000;
@@ -299,6 +299,7 @@ function bindElements() {
   elements.quickCommands = document.querySelectorAll(".quick-command");
   elements.fileButtons = document.querySelectorAll(".file-button");
   elements.haEntityFilters = document.querySelectorAll(".ha-entity-filter");
+  elements.topNavButtons = document.querySelectorAll(".top-tab");
 }
 
 async function fetchJson(url, options = {}) {
@@ -649,6 +650,31 @@ function openCommandPalette() {
 function closeCommandPalette() {
   if (elements.commandPalette) {
     elements.commandPalette.hidden = true;
+  }
+}
+
+function navigateDashboardSection(targetId, sourceButton = null) {
+  const target = document.getElementById(targetId);
+  if (!target) {
+    return;
+  }
+  setActiveTopTab(sourceButton || findTopTabForTarget(targetId));
+  if (!target.hasAttribute("tabindex")) {
+    target.setAttribute("tabindex", "-1");
+  }
+  target.scrollIntoView({ behavior: "smooth", block: "start" });
+  target.focus({ preventScroll: true });
+}
+
+function findTopTabForTarget(targetId) {
+  return Array.from(elements.topNavButtons || []).find((button) => button.dataset.target === targetId) || null;
+}
+
+function setActiveTopTab(activeButton) {
+  for (const button of elements.topNavButtons || []) {
+    const isActive = button === activeButton;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-current", isActive ? "page" : "false");
   }
 }
 
@@ -4241,6 +4267,11 @@ function wireDashboardEvents() {
   });
   for (const button of elements.haEntityFilters) {
     button.addEventListener("click", () => filterHaEntities(button.dataset.filter));
+  }
+  for (const button of elements.topNavButtons || []) {
+    if (button.matches(".top-tab:not(:disabled)") && button.dataset.target) {
+      button.addEventListener("click", () => navigateDashboardSection(button.dataset.target, button));
+    }
   }
   elements.refreshSmartHomeActions.addEventListener("click", () => withButtonLoading(elements.refreshSmartHomeActions, "Lade...", refreshSmartHomeActions));
   elements.discoverSmartHomeCandidates.addEventListener("click", () => withButtonLoading(elements.discoverSmartHomeCandidates, "Suche...", discoverSmartHomeCandidates));

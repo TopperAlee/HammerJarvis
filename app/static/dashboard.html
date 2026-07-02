@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
-    <link rel="stylesheet" href="/static/dashboard.css?v=protool-importer-20260702">
+    <link rel="stylesheet" href="/static/dashboard.css?v=topbar-navigation-20260702">
   </head>
   <body>
     <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
@@ -41,12 +41,12 @@
       <main class="command-center">
         <header class="top-hud">
           <div class="top-tabs" aria-label="Bereiche">
-            <span class="active">Übersicht</span>
-            <span>System</span>
-            <span>Daten</span>
-            <span>Netzwerk</span>
-            <span>Sicherheit</span>
-            <span>Einstellungen</span>
+            <button class="top-tab active" type="button" data-target="commandCenter">Command Center</button>
+            <button class="top-tab" type="button" data-target="engineering">Engineering</button>
+            <button class="top-tab" type="button" data-target="knowledge">Knowledge</button>
+            <button class="top-tab" type="button" data-target="haControlCenter">Automation / Home Assistant</button>
+            <button class="top-tab" type="button" data-target="chat">Voice / Assistant</button>
+            <button class="top-tab" type="button" data-target="performance">Settings / Status</button>
           </div>
           <div class="top-indicators">
             <span id="weatherPlaceholder">Wetter: lokal</span>
@@ -576,6 +576,6 @@
       </div>
     </div>
 
-    <script src="/static/dashboard.js?v=protool-importer-20260702" defer></script>
+    <script src="/static/dashboard.js?v=topbar-navigation-20260702" defer></script>
   </body>
 </html>

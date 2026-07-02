@@ -234,11 +234,31 @@ def test_dashboard_build_marker_and_cache_busting_are_present() -> None:
     html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
     js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
 
-    assert 'src="/static/dashboard.js?v=protool-importer-20260702" defer' in html
-    assert 'const DASHBOARD_BUILD = "protool-importer-20260702"' in js
+    assert 'src="/static/dashboard.js?v=topbar-navigation-20260702" defer' in html
+    assert 'const DASHBOARD_BUILD = "topbar-navigation-20260702"' in js
     assert "dashboard.js geladen" in js
     assert "document.documentElement.dataset.dashboardBuild = DASHBOARD_BUILD" in js
     assert "Build: ${DASHBOARD_BUILD}" in js
+
+
+def test_dashboard_top_menu_entries_are_actionable_or_disabled() -> None:
+    html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
+    js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
+    css = Path("app/static/dashboard.css").read_text(encoding="utf-8")
+
+    assert 'class="top-tab active"' in html
+    assert 'data-target="commandCenter"' in html
+    assert 'data-target="engineering"' in html
+    assert 'data-target="knowledge"' in html
+    assert 'data-target="haControlCenter"' in html
+    assert 'data-target="chat"' in html
+    assert 'data-target="performance"' in html
+    assert 'href="#"' not in html
+    assert "navigateDashboardSection" in js
+    assert "setActiveTopTab" in js
+    assert "scrollIntoView" in js
+    assert 'button.matches(".top-tab:not(:disabled)")' in js
+    assert ".top-tab.active" in css
 
 
 def test_dashboard_global_error_handlers_are_registered() -> None:
