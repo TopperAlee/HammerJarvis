@@ -1151,6 +1151,47 @@ Aktion 1 ablehnen.
 Das bisherige browsergebundene Wake-Word bleibt nur ein optionaler Fallback.
 Die robuste Windows-first-Variante ist der `Hammer Jarvis Desktop Agent`.
 
+## Manueller Desktop-Start
+
+Seit v0.7.1 soll Hammer Jarvis bewusst per Desktop-Icon gestartet werden. Der
+Windows-Login-Autostart des Desktop-Agenten kann deaktiviert werden, ohne die
+lokalen Backend-, Dashboard-, Voice- oder Wake-Funktionen zu entfernen.
+
+Autostart der geplanten Desktop-Agent-Aufgabe deaktivieren:
+
+```powershell
+.\scripts\disable-desktop-agent-autostart.ps1
+```
+
+Desktop-Verknüpfung erstellen:
+
+```powershell
+.\scripts\create-desktop-shortcut.ps1
+```
+
+Jarvis manuell starten:
+
+```powershell
+.\scripts\start-hammer-jarvis.ps1
+```
+
+Das Skript prüft `http://127.0.0.1:8001/assistant/health`, startet das Backend
+bei Bedarf lokal mit `.venv\Scripts\python.exe -m uvicorn app.main:app --host
+127.0.0.1 --port 8001` und öffnet danach das Dashboard:
+
+```text
+http://127.0.0.1:8001/dashboard
+```
+
+Jarvis stoppen:
+
+```powershell
+.\scripts\stop-hammer-jarvis.ps1
+```
+
+Das Stop-Skript beendet nur einen Prozess, der lokal auf `127.0.0.1:8001`
+lauscht. Andere Ports werden nicht beendet.
+
 ## Hammer Jarvis Desktop Agent
 
 Hammer Jarvis nutzt bewusst keinen klassischen Windows-Dienst. Ein Dienst läuft
