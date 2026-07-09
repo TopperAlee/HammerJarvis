@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
+from hammer_jarvis.research.answer_engine import AnswerEngine, EngineeringObjectReference, MockResearchLLM, ResearchAnswer
 from hammer_jarvis.research.context_builder import ContextBuilder
 from hammer_jarvis.research.models import ResearchRequest, ResearchSource
 from hammer_jarvis.research.orchestrator import ResearchOrchestrator
@@ -101,6 +102,60 @@ def test_research_sources_are_documented_as_local_only() -> None:
     assert next(source for source in sources if source["type"] == "WEB")["enabled"] is False
 
 
+def test_mock_research_llm_returns_deterministic_answer() -> None:
+    answer = MockResearchLLM().generate("Benutzerfrage\nHydraulikpumpe")
+
+    assert "Hydraulikpumpe" in answer
+    assert "lokalen Research-Kontext" in answer
+
+
+def test_research_answer_dataclasses_are_json_compatible() -> None:
+    reference = EngineeringObjectReference(
+        id="text:demo-project:hydraulikpumpe",
+        type="TextResource",
+        name="Hydraulikpumpe überprüfen",
+        source="MessageText.csv",
+    )
+    answer = ResearchAnswer(
+        answer="Deterministische Antwort.",
+        sources=[],
+        engineering_objects=[reference],
+        recommendations=["Quelle prüfen."],
+        confidence="mittel",
+        generated_at="2026-07-09T00:00:00+00:00",
+    )
+
+    payload = asdict(answer)
+
+    assert payload["engineering_objects"][0]["type"] == "TextResource"
+    assert payload["confidence"] == "mittel"
+
+
+def test_answer_engine_builds_answer_with_sources_objects_and_recommendations() -> None:
+    answer = AnswerEngine(llm=MockResearchLLM()).build_answer("Hydraulikpumpe")
+
+    assert answer.answer
+    assert answer.sources
+    assert answer.engineering_objects
+    assert answer.recommendations
+    assert answer.confidence in {"niedrig", "mittel", "hoch"}
+    assert answer.generated_at
+    assert any(item.type == "TextResource" for item in answer.engineering_objects)
+
+
+def test_research_answer_api_returns_sources_objects_and_recommendations() -> None:
+    response = client.post("/assistant/research/answer", json={"query": "Hydraulikpumpe"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["answer"]
+    assert data["sources"]
+    assert data["engineering_objects"]
+    assert data["recommendations"]
+    assert data["confidence"]
+    assert data["generated_at"]
+
+
 def test_dashboard_contains_research_context_card() -> None:
     html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
     js = Path("app/static/dashboard.js").read_text(encoding="utf-8")
@@ -108,5 +163,11 @@ def test_dashboard_contains_research_context_card() -> None:
     assert 'id="researchContextQuery"' in html
     assert 'id="researchSourceCount"' in html
     assert 'id="researchContextSize"' in html
+    assert 'id="researchAnswerText"' in html
+    assert 'id="researchAnswerSources"' in html
+    assert 'id="researchEngineeringObjects"' in html
+    assert 'id="researchRecommendations"' in html
     assert "/assistant/research/context" in js
+    assert "/assistant/research/answer" in js
     assert "refreshResearchContext" in js
+    assert "buildResearchAnswer" in js

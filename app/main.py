@@ -71,6 +71,7 @@ from hammer_jarvis.intent.models import IntentRequest
 from hammer_jarvis.intent.parser import IntentParser
 from hammer_jarvis.intent.recommendations import RecommendationEngine
 from hammer_jarvis.intent.registry import get_commands
+from hammer_jarvis.research.answer_engine import AnswerEngine
 from hammer_jarvis.research.models import ResearchRequest
 from hammer_jarvis.research.orchestrator import ResearchOrchestrator
 from hammer_jarvis.research.sources import available_research_sources
@@ -1071,6 +1072,14 @@ def assistant_research_context(request: ResearchContextRequest) -> dict[str, Any
 @app.get("/assistant/research/sources")
 def assistant_research_sources() -> list[dict[str, object]]:
     return available_research_sources()
+
+
+@app.post("/assistant/research/answer")
+def assistant_research_answer(request: ResearchContextRequest) -> dict[str, Any]:
+    answer = AnswerEngine(
+        research_orchestrator=ResearchOrchestrator(context_store=_intent_context_store),
+    ).build_answer(request.query)
+    return asdict(answer)
 
 
 def _is_knowledge_empty() -> bool:

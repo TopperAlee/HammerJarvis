@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
-    <link rel="stylesheet" href="/static/dashboard.css?v=research-orchestrator-20260709">
+    <link rel="stylesheet" href="/static/dashboard.css?v=research-answer-engine-20260709">
   </head>
   <body>
     <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
@@ -79,6 +79,14 @@
                 <p>Query: <strong id="researchContextQuery">-</strong></p>
                 <p>Sources: <strong id="researchSourceCount">-</strong></p>
                 <p>Context-Größe: <strong id="researchContextSize">-</strong></p>
+                <button id="researchAnswerButton" class="ghost-button small-action" type="button">Antwort bauen</button>
+                <p id="researchAnswerText" class="muted">Noch keine Research-Antwort erzeugt.</p>
+                <h3>Quellen</h3>
+                <ul id="researchAnswerSources" class="signal-list compact"></ul>
+                <h3>Engineering Objects</h3>
+                <ul id="researchEngineeringObjects" class="signal-list compact"></ul>
+                <h3>Empfehlungen</h3>
+                <ul id="researchRecommendations" class="signal-list compact"></ul>
               </section>
             </div>
           </div>
@@ -582,6 +590,6 @@
       </div>
     </div>
 
-    <script src="/static/dashboard.js?v=research-orchestrator-20260709" defer></script>
+    <script src="/static/dashboard.js?v=research-answer-engine-20260709" defer></script>
   </body>
 </html>

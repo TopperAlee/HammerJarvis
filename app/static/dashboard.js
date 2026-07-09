@@ -1,4 +1,4 @@
-const DASHBOARD_BUILD = "research-orchestrator-20260709";
+const DASHBOARD_BUILD = "research-answer-engine-20260709";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
 const fetchTimeoutMs = 15000;
@@ -251,6 +251,11 @@ function bindElements() {
     "researchContextQuery",
     "researchSourceCount",
     "researchContextSize",
+    "researchAnswerButton",
+    "researchAnswerText",
+    "researchAnswerSources",
+    "researchEngineeringObjects",
+    "researchRecommendations",
     "protoolFilePath",
     "protoolBrowseButton",
     "protoolFilePicker",
@@ -805,6 +810,31 @@ async function refreshResearchContext() {
     setText("researchSourceCount", "-");
     setText("researchContextSize", "Research-Kontext nicht verfügbar");
   }
+}
+
+async function buildResearchAnswer() {
+  const query = text(elements.commandPaletteInput?.value, "").trim()
+    || text(elements.knowledgeSearchInput?.value, "").trim()
+    || "Systemstatus";
+  try {
+    const answer = await postJson("/assistant/research/answer", { query });
+    setText("researchAnswerText", answer.answer || "Keine Antwort erzeugt.");
+    renderList(elements.researchAnswerSources, answer.sources || [], renderResearchSource, "Keine Quellen.");
+    renderList(elements.researchEngineeringObjects, answer.engineering_objects || [], renderEngineeringObject, "Keine Engineering Objects.");
+    renderList(elements.researchRecommendations, answer.recommendations || [], (recommendation) => recommendation, "Keine Empfehlungen.");
+    setText("researchSourceCount", String((answer.sources || []).length));
+  } catch (error) {
+    setText("researchAnswerText", "Research-Antwort konnte nicht erzeugt werden.");
+  }
+}
+
+function renderResearchSource(source) {
+  return `${source.type || "SOURCE"}: ${source.title || source.id || "Quelle"}`;
+}
+
+function renderEngineeringObject(object) {
+  const source = object.source ? ` (${object.source})` : "";
+  return `${object.type || "Object"}: ${object.name || object.id || "Engineering Object"}${source}`;
 }
 
 function appendCode(parent, value) {
@@ -4284,6 +4314,7 @@ function wireDashboardEvents() {
   elements.refreshWatchers.addEventListener("click", () => withButtonLoading(elements.refreshWatchers, "Lade...", refreshAlerts));
   elements.refreshPerformance.addEventListener("click", () => withButtonLoading(elements.refreshPerformance, "Messe...", refreshPerformance));
   elements.runOllamaBenchmark.addEventListener("click", () => withButtonLoading(elements.runOllamaBenchmark, "Benchmark...", runOllamaBenchmark));
+  elements.researchAnswerButton?.addEventListener("click", () => withButtonLoading(elements.researchAnswerButton, "Baue Antwort...", buildResearchAnswer));
   elements.syncHaEntities.addEventListener("click", () => withButtonLoading(elements.syncHaEntities, "Sync...", syncHaEntities));
   elements.haEntitySearchButton.addEventListener("click", () => withButtonLoading(elements.haEntitySearchButton, "Suche...", searchHaEntities));
   elements.haEntitySearchInput.addEventListener("keydown", (event) => {
