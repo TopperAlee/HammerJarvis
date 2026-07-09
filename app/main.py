@@ -71,6 +71,9 @@ from hammer_jarvis.intent.models import IntentRequest
 from hammer_jarvis.intent.parser import IntentParser
 from hammer_jarvis.intent.recommendations import RecommendationEngine
 from hammer_jarvis.intent.registry import get_commands
+from hammer_jarvis.research.models import ResearchRequest
+from hammer_jarvis.research.orchestrator import ResearchOrchestrator
+from hammer_jarvis.research.sources import available_research_sources
 from hammer_jarvis.tools.protool.report import analyze_protool_csv
 
 
@@ -182,6 +185,19 @@ class ActionExecuteRequest(BaseModel):
 
 class LLMTestRequest(BaseModel):
     message: str = Field(min_length=1)
+
+
+class ResearchContextRequest(BaseModel):
+    query: str = Field(min_length=1)
+    active_context: dict[str, Any] = Field(default_factory=dict)
+    active_project: str | None = None
+    active_file: str | None = None
+    active_panel: str | None = None
+    include_graph: bool = True
+    include_knowledge: bool = True
+    include_capabilities: bool = True
+    include_documents: bool = True
+    include_web: bool = False
 
 
 class MissionRunRequest(BaseModel):
@@ -1032,6 +1048,29 @@ def assistant_recommendations() -> list[dict[str, Any]]:
     knowledge_empty = _is_knowledge_empty()
     recommendations = RecommendationEngine(knowledge_empty=knowledge_empty, voice_ready=False).build(context)
     return [recommendation.model_dump() for recommendation in recommendations]
+
+
+@app.post("/assistant/research/context")
+def assistant_research_context(request: ResearchContextRequest) -> dict[str, Any]:
+    research_request = ResearchRequest(
+        query=request.query,
+        active_context=request.active_context,
+        active_project=request.active_project,
+        active_file=request.active_file,
+        active_panel=request.active_panel,
+        include_graph=request.include_graph,
+        include_knowledge=request.include_knowledge,
+        include_capabilities=request.include_capabilities,
+        include_documents=request.include_documents,
+        include_web=False,
+    )
+    context = ResearchOrchestrator(context_store=_intent_context_store).build_context(research_request)
+    return asdict(context)
+
+
+@app.get("/assistant/research/sources")
+def assistant_research_sources() -> list[dict[str, object]]:
+    return available_research_sources()
 
 
 def _is_knowledge_empty() -> bool:

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
-    <link rel="stylesheet" href="/static/dashboard.css?v=topbar-navigation-20260702">
+    <link rel="stylesheet" href="/static/dashboard.css?v=research-orchestrator-20260709">
   </head>
   <body>
     <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
@@ -73,6 +73,12 @@
               <section>
                 <h2>Empfehlungen</h2>
                 <ul id="recommendationsList" class="signal-list compact"></ul>
+              </section>
+              <section id="researchContextCard" class="research-context-card">
+                <h2>Research</h2>
+                <p>Query: <strong id="researchContextQuery">-</strong></p>
+                <p>Sources: <strong id="researchSourceCount">-</strong></p>
+                <p>Context-Größe: <strong id="researchContextSize">-</strong></p>
               </section>
             </div>
           </div>
@@ -576,6 +582,6 @@
       </div>
     </div>
 
-    <script src="/static/dashboard.js?v=topbar-navigation-20260702" defer></script>
+    <script src="/static/dashboard.js?v=research-orchestrator-20260709" defer></script>
   </body>
 </html>

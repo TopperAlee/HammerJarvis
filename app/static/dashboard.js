@@ -1,4 +1,4 @@
-const DASHBOARD_BUILD = "topbar-navigation-20260702";
+const DASHBOARD_BUILD = "research-orchestrator-20260709";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
 const fetchTimeoutMs = 15000;
@@ -248,6 +248,9 @@ function bindElements() {
     "commandPaletteCommands",
     "activeContextList",
     "recommendationsList",
+    "researchContextQuery",
+    "researchSourceCount",
+    "researchContextSize",
     "protoolFilePath",
     "protoolBrowseButton",
     "protoolFilePicker",
@@ -725,6 +728,7 @@ async function refreshCommandCenter() {
   await Promise.all([
     refreshActiveContext(),
     refreshRecommendations(),
+    refreshResearchContext(),
   ]);
 }
 
@@ -779,6 +783,28 @@ function renderRecommendation(recommendation) {
   badge.textContent = recommendation.severity || "info";
   wrapper.append(" ", badge);
   return wrapper;
+}
+
+async function refreshResearchContext() {
+  if (!elements.researchContextQuery || !elements.researchSourceCount || !elements.researchContextSize) {
+    return;
+  }
+  const query = text(elements.commandPaletteInput?.value, "").trim()
+    || text(elements.knowledgeSearchInput?.value, "").trim()
+    || "Systemstatus";
+  try {
+    const context = await postJson("/assistant/research/context", {
+      query,
+      include_web: false,
+    });
+    setText("researchContextQuery", context.request?.query || query);
+    setText("researchSourceCount", String(context.statistics?.source_count ?? (context.sources || []).length ?? 0));
+    setText("researchContextSize", `${context.statistics?.prompt_char_count ?? text(context.prompt, "").length} Zeichen`);
+  } catch (error) {
+    setText("researchContextQuery", query);
+    setText("researchSourceCount", "-");
+    setText("researchContextSize", "Research-Kontext nicht verfügbar");
+  }
 }
 
 function appendCode(parent, value) {
