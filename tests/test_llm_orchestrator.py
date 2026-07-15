@@ -618,6 +618,12 @@ def test_home_assistant_offline_executes_problem_tool(monkeypatch) -> None:
         ActionRisk.GREEN,
         lambda: executed.append("ha") or _fake_home_assistant_problems(),
     )
+    registry.register(
+        "ecoflow_energy_overview",
+        "EcoFlow",
+        ActionRisk.GREEN,
+        lambda: {"soc_percent": 80, "warnings": [], "human_status": {"headline": "EcoFlow ist erreichbar.", "details": []}},
+    )
 
     class FakeLLMClient:
         def is_available(self):
@@ -688,7 +694,20 @@ def test_deterministic_commands_bypass_native_and_compatible_ollama(monkeypatch,
         "Recherchiere offizielle Dokumentation zu Python",
     ]
 
-    orchestrator = AssistantOrchestrator()
+    registry = ToolRegistry()
+    registry.register(
+        "home_assistant_get_problems",
+        "HA",
+        ActionRisk.GREEN,
+        lambda: {"critical_count": 0, "warning_count": 0, "informational_count": 0, "critical": [], "warning": [], "informational": []},
+    )
+    registry.register(
+        "ecoflow_energy_overview",
+        "EcoFlow",
+        ActionRisk.GREEN,
+        lambda: {"soc_percent": 80, "warnings": [], "human_status": {"headline": "EcoFlow ist erreichbar.", "details": []}},
+    )
+    orchestrator = AssistantOrchestrator(registry=registry)
     for command in commands:
         result = orchestrator.handle_message(command)
         assert result["tool"] != "general_answer"

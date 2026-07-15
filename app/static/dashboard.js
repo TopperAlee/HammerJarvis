@@ -1,4 +1,4 @@
-const DASHBOARD_BUILD = "engineering-diagnostics-20260714";
+const DASHBOARD_BUILD = "document-intelligence-20260714";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
 const fetchTimeoutMs = 15000;
@@ -238,6 +238,15 @@ function bindElements() {
     "knowledgeUploadQueue",
     "knowledgeUploadSummary",
     "knowledgeSupportedFormats",
+    "documentPathInput",
+    "documentOpenButton",
+    "documentStatus",
+    "documentType",
+    "documentPageCount",
+    "documentTextLayer",
+    "documentOcrStatus",
+    "documentExtractionStatus",
+    "documentOcrWarning",
     "commandCenter",
     "openCommandPalette",
     "closeCommandPalette",
@@ -2836,6 +2845,65 @@ async function indexKnowledgePath() {
   }
 }
 
+async function openDocumentIntelligence() {
+  const path = text(elements.documentPathInput?.value, "").trim();
+  if (!path) {
+    clearDocumentIntelligence(false);
+    setText("documentStatus", "Bitte einen lokalen Dokumentpfad eingeben.");
+    return;
+  }
+  clearDocumentIntelligence(false);
+  setText("documentStatus", "Dokument wird read-only geoeffnet...");
+  try {
+    const result = await postJson("/assistant/documents/open", { path });
+    renderDocumentIntelligence(result);
+  } catch (error) {
+    clearDocumentIntelligence(false);
+    if (error?.kind === "http") {
+      setText("documentStatus", "Dokument konnte nicht geoeffnet werden. Bitte Pfad und Dateityp pruefen.");
+      return;
+    }
+    setText("documentStatus", "Document Intelligence konnte das Dokument nicht laden.");
+  }
+}
+
+function clearDocumentIntelligence(clearStatus = true) {
+  if (clearStatus) {
+    setText("documentStatus", "Lokales Dokument read-only öffnen und Extraktionsstatus prüfen.");
+  }
+  setText("documentType", "-");
+  setText("documentPageCount", "-");
+  setText("documentTextLayer", "-");
+  setText("documentOcrStatus", "-");
+  setText("documentExtractionStatus", "-");
+  if (elements.documentOcrWarning) {
+    elements.documentOcrWarning.hidden = true;
+  }
+}
+
+function formatDocumentOcrStatus(status) {
+  return {
+    required_not_available: "OCR erforderlich - lokale OCR nicht aktiviert",
+    required: "OCR erforderlich",
+    not_required: "OCR nicht erforderlich",
+  }[status] || text(status);
+}
+
+function renderDocumentIntelligence(result) {
+  const documentInfo = result.document || {};
+  const content = result.content || {};
+  const warnings = content.warnings || [];
+  setText("documentStatus", `Dokument geladen: ${documentInfo.filename || "-"}`);
+  setText("documentType", documentInfo.type || "-");
+  setText("documentPageCount", content.page_count ?? "-");
+  setText("documentTextLayer", content.has_text_layer ? "Ja" : "Nein");
+  setText("documentOcrStatus", formatDocumentOcrStatus(result.ocr_status || (warnings.includes("OCR_REQUIRED") ? "required" : "not_required")));
+  setText("documentExtractionStatus", result.extraction_status || "-");
+  if (elements.documentOcrWarning) {
+    elements.documentOcrWarning.hidden = !warnings.includes("OCR_REQUIRED");
+  }
+}
+
 async function openEngineeringProject() {
   const path = text(elements.engineeringProjectPath?.value, "").trim();
   if (!path) {
@@ -4453,6 +4521,12 @@ function wireDashboardEvents() {
   elements.knowledgeIndexInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       withButtonLoading(elements.knowledgeIndexButton, "Indexiere...", indexKnowledgePath);
+    }
+  });
+  elements.documentOpenButton?.addEventListener("click", () => withButtonLoading(elements.documentOpenButton, "Oeffne...", openDocumentIntelligence));
+  elements.documentPathInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      withButtonLoading(elements.documentOpenButton, "Oeffne...", openDocumentIntelligence);
     }
   });
   elements.engineeringOpenProject?.addEventListener("click", () => withButtonLoading(elements.engineeringOpenProject, "Lade...", openEngineeringProject));

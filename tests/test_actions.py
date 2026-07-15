@@ -554,7 +554,7 @@ def test_action_execution_writes_audit_log(monkeypatch, tmp_path: Path) -> None:
 
 def test_action_endpoints_and_dashboard_still_work() -> None:
     action = pending_action_store.create_action(
-        {"title": "Diagnose", "description": "Diagnose", "tool_name": "home_assistant_get_problems", "arguments": {}, "risk": "GREEN", "source": "chat"}
+        {"title": "Fähigkeiten", "description": "Fähigkeiten", "tool_name": "assistant_capabilities", "arguments": {}, "risk": "GREEN", "source": "chat"}
     )
 
     pending = client.get("/assistant/actions/pending")

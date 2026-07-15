@@ -168,6 +168,9 @@ def test_watchers_status_endpoint_returns_200(monkeypatch, tmp_path) -> None:
 
 def test_watchers_run_endpoint_returns_200(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("WATCHER_ALERTS_FILE", str(tmp_path / "alerts.json"))
+    rules_file = tmp_path / "watcher_rules.json"
+    rules_file.write_text('{"rules": []}', encoding="utf-8")
+    monkeypatch.setenv("WATCHER_RULES_FILE", str(rules_file))
 
     response = client.post("/assistant/watchers/run")
 

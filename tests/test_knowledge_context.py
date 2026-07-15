@@ -8,6 +8,8 @@ from typing import Any
 from app.assistant.knowledge.context_builder import relevant_knowledge_context
 from app.assistant.orchestrator import AssistantOrchestrator
 from app.assistant.system_prompt import SYSTEM_PROMPT
+from app.assistant.tool_registry import ToolRegistry
+from app.agent.permissions import ActionRisk
 
 
 def _configure_knowledge(monkeypatch, tmp_path: Path, chunks: list[dict[str, Any]]) -> None:
@@ -334,6 +336,21 @@ def test_tool_first_route_does_not_load_document_context(monkeypatch, tmp_path: 
         raise AssertionError("Dokumentkontext darf fuer Tool-Route nicht geladen werden")
 
     monkeypatch.setattr("app.assistant.orchestrator.relevant_knowledge_context", fail_context)
-    result = AssistantOrchestrator().handle_message("EcoFlow Energie")
+    registry = ToolRegistry()
+    registry.register(
+        "ecoflow_energy_overview",
+        "EcoFlow Energie",
+        ActionRisk.GREEN,
+        lambda: {
+            "human_status": {
+                "headline": "EcoFlow ist erreichbar.",
+                "details": ["Batterie: 55 %"],
+            },
+            "warnings": [],
+            "battery_status": {"sign_convention": "unknown"},
+            "battery_power_w": 0,
+        },
+    )
+    result = AssistantOrchestrator(registry=registry).handle_message("EcoFlow Energie")
 
     assert result["tool"] == "ecoflow_energy_overview"

@@ -48,6 +48,7 @@ from app.tools.files.file_creator import FileCreatorTool
 from app.tools.files.file_inspect_tool import FileInspectTool
 from app.tools.files.file_open_tool import FileOpenTool
 from app.tools.files.file_search_tool import FileSearchTool, get_file_search_status
+from app.tools.files.path_safety import normalize_user_path
 from app.logging_utils.audit import write_audit_log
 from app.tools.home_assistant import HomeAssistantTool
 from app.tools.home_assistant_actions import HomeAssistantActionTool
@@ -67,6 +68,10 @@ from hammer_jarvis.engineering.scanner.filesystem import ProjectScanner
 from hammer_jarvis.engineering.tree import EngineeringTreeBuilder
 from hammer_jarvis.diagnostics.engine import DiagnosticEngine, DiagnosticReportStore, report_to_dict, validate_severity
 from hammer_jarvis.diagnostics.registry import DiagnosticRuleRegistry
+from hammer_jarvis.documents.classifier import DocumentClassifier
+from hammer_jarvis.documents.extractor import extract_document
+from hammer_jarvis.documents.models import Document, DocumentContent
+from hammer_jarvis.documents.store import DocumentStore
 from hammer_jarvis.intent.capabilities import CapabilityRegistry
 from hammer_jarvis.intent.context import ContextStore
 from hammer_jarvis.intent.models import IntentRequest
@@ -91,6 +96,7 @@ _engineering_project_store: dict[str, ImportedProject] = {}
 _protool_text_resource_store: dict[str, dict[str, Any]] = {}
 _intent_context_store = ContextStore()
 _diagnostic_report_store = DiagnosticReportStore()
+_document_store = DocumentStore()
 
 
 @app.on_event("startup")
@@ -208,6 +214,11 @@ class EngineeringDiagnosticsRequest(BaseModel):
     project_id: str | None = None
     include_categories: list[str] = Field(default_factory=lambda: ["text", "graph", "project"])
     severity_min: str = "info"
+
+
+class DocumentOpenRequest(BaseModel):
+    path: str = Field(min_length=1)
+    mime_type: str | None = None
 
 
 class MissionRunRequest(BaseModel):
@@ -571,6 +582,94 @@ def assistant_health() -> dict[str, str]:
 @app.get("/dashboard")
 def dashboard() -> FileResponse:
     return FileResponse(STATIC_DIR / "dashboard.html", media_type="text/html")
+
+
+def _document_extraction_status(content: DocumentContent) -> str:
+    if "OCR_REQUIRED" in content.warnings:
+        return "ocr_required"
+    if content.warnings and not content.text:
+        return "warning"
+    return "extracted"
+
+
+def _document_ocr_status(content: DocumentContent) -> str:
+    if "OCR_REQUIRED" in content.warnings and "OCR_NOT_AVAILABLE" in content.warnings:
+        return "required_not_available"
+    if "OCR_REQUIRED" in content.warnings:
+        return "required"
+    return "not_required"
+
+
+@app.post("/assistant/documents/open")
+def assistant_documents_open(request: DocumentOpenRequest) -> dict[str, Any]:
+    try:
+        path = normalize_user_path(request.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Dokument nicht gefunden.")
+    if not path.is_file():
+        raise HTTPException(status_code=400, detail="Pfad zeigt nicht auf eine Datei.")
+
+    document_type = DocumentClassifier().classify(path.name, request.mime_type)
+    document = Document.from_path(path, document_type=document_type, mime_type=request.mime_type)
+    content = extract_document(document)
+    _document_store.save(document, content)
+    knowledge = _document_store.register_for_knowledge(document)
+    return {
+        "document": asdict(document),
+        "content": asdict(content),
+        "knowledge": knowledge,
+        "extraction_status": _document_extraction_status(content),
+        "ocr_status": _document_ocr_status(content),
+    }
+
+
+@app.get("/assistant/documents/types")
+def assistant_documents_types() -> dict[str, Any]:
+    return {
+        "types": DocumentClassifier().supported_types(),
+        "ocr": {
+            "available": False,
+            "adapter": "NullOCR",
+            "message": "Lokale OCR ist noch nicht aktiviert.",
+        },
+    }
+
+
+@app.get("/assistant/documents/status/{document_id}")
+def assistant_documents_status(document_id: str) -> dict[str, Any]:
+    document = _document_store.get(document_id)
+    content = _document_store.get_content(document_id)
+    if not document or not content:
+        raise HTTPException(status_code=404, detail="Dokument nicht im lokalen Document Store gefunden.")
+    return {
+        "document_id": document.id,
+        "filename": document.filename,
+        "type": document.type,
+        "page_count": content.page_count,
+        "has_text_layer": content.has_text_layer,
+        "extracted_with": content.extracted_with,
+        "extraction_status": _document_extraction_status(content),
+        "ocr_status": _document_ocr_status(content),
+        "warnings": content.warnings,
+    }
+
+
+@app.get("/assistant/documents/{document_id}/content")
+def assistant_documents_content(document_id: str) -> dict[str, Any]:
+    content = _document_store.get_content(document_id)
+    if not content:
+        raise HTTPException(status_code=404, detail="Dokumentinhalt nicht im lokalen Document Store gefunden.")
+    return asdict(content)
+
+
+@app.get("/assistant/documents/{document_id}")
+def assistant_documents_get(document_id: str) -> dict[str, Any]:
+    document = _document_store.get(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Dokument nicht im lokalen Document Store gefunden.")
+    return asdict(document)
 
 
 @app.get("/assistant/voice/wake/status")

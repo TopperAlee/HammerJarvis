@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
-    <link rel="stylesheet" href="/static/dashboard.css?v=engineering-diagnostics-20260714">
+    <link rel="stylesheet" href="/static/dashboard.css?v=document-intelligence-20260714">
   </head>
   <body>
     <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
@@ -539,6 +539,41 @@
             <ul id="knowledgeDocuments" class="signal-list compact"></ul>
           </section>
 
+          <section id="documentIntelligence" class="hud-panel actions-panel">
+            <div class="panel-heading">
+              <span>Document Intelligence</span>
+              <span class="muted">Read-only</span>
+            </div>
+            <p id="documentStatus" class="muted">Lokales Dokument read-only öffnen und Extraktionsstatus prüfen.</p>
+            <div class="control-row">
+              <input id="documentPathInput" type="text" autocomplete="off" placeholder="Lokaler Dokumentpfad, z.B. C:\...\manual.pdf">
+              <button id="documentOpenButton" type="button">Öffnen</button>
+            </div>
+            <dl class="protool-summary">
+              <div>
+                <dt>Typ</dt>
+                <dd id="documentType">-</dd>
+              </div>
+              <div>
+                <dt>Seiten</dt>
+                <dd id="documentPageCount">-</dd>
+              </div>
+              <div>
+                <dt>Textlayer</dt>
+                <dd id="documentTextLayer">-</dd>
+              </div>
+              <div>
+                <dt>OCR Status</dt>
+                <dd id="documentOcrStatus">-</dd>
+              </div>
+              <div>
+                <dt>Extraktion</dt>
+                <dd id="documentExtractionStatus">-</dd>
+              </div>
+            </dl>
+            <p id="documentOcrWarning" class="warning-strip" hidden>OCR erforderlich – lokale OCR noch nicht aktiviert.</p>
+          </section>
+
           <section id="actions" class="hud-panel actions-panel">
             <div class="panel-heading">
               <span>Aktionen</span>
@@ -626,6 +661,6 @@
       </div>
     </div>
 
-    <script src="/static/dashboard.js?v=engineering-diagnostics-20260714" defer></script>
+    <script src="/static/dashboard.js?v=document-intelligence-20260714" defer></script>
   </body>
 </html>

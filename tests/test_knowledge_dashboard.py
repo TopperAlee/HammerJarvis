@@ -87,8 +87,8 @@ def test_knowledge_dashboard_preserves_voice_and_desktop_event_hooks_without_new
 def test_dashboard_uses_knowledge_ingestion_cache_busting_value() -> None:
     html, js, _css = _dashboard_files()
 
-    assert "engineering-diagnostics-20260714" in html
-    assert 'const DASHBOARD_BUILD = "engineering-diagnostics-20260714";' in js
+    assert "document-intelligence-20260714" in html
+    assert 'const DASHBOARD_BUILD = "document-intelligence-20260714";' in js
 
 
 def test_knowledge_panel_has_a_reachable_grid_area_after_actions_are_split() -> None:
