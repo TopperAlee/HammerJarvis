@@ -78,6 +78,9 @@ from hammer_jarvis.intent.models import IntentRequest
 from hammer_jarvis.intent.parser import IntentParser
 from hammer_jarvis.intent.recommendations import RecommendationEngine
 from hammer_jarvis.intent.registry import get_commands
+from hammer_jarvis.query.engine import EngineeringQueryEngine, EngineeringQueryError
+from hammer_jarvis.query.models import EngineeringQueryRequest
+from hammer_jarvis.query.store import EngineeringQueryStore
 from hammer_jarvis.research.answer_engine import AnswerEngine
 from hammer_jarvis.research.models import ResearchRequest
 from hammer_jarvis.research.orchestrator import ResearchOrchestrator
@@ -99,6 +102,7 @@ _protool_text_resource_store: dict[str, dict[str, Any]] = {}
 _intent_context_store = ContextStore()
 _diagnostic_report_store = DiagnosticReportStore()
 _document_store = DocumentStore()
+_engineering_query_store = EngineeringQueryStore()
 _understanding_report: EngineeringUnderstandingReport | None = None
 _understanding_object_store: dict[str, dict[str, Any]] = {}
 
@@ -462,6 +466,27 @@ def _build_understanding_object_store(
     for orphan in report.orphan_objects:
         objects.setdefault(str(orphan.get("id")), orphan)
     return objects
+
+
+def _engineering_query_engine() -> EngineeringQueryEngine:
+    return EngineeringQueryEngine(
+        graph=_understanding_source_graph(),
+        understanding=_understanding_report,
+        objects=_understanding_object_store,
+        diagnostics=_diagnostic_report_store.get_latest(),
+        documents=_document_store.list(),
+    )
+
+
+def _engineering_query_request(payload: dict[str, Any]) -> EngineeringQueryRequest:
+    try:
+        return EngineeringQueryRequest(**payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid engineering query request.") from exc
+
+
+def _raise_query_error(exc: EngineeringQueryError) -> None:
+    raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 class EntityActionRequest(BaseModel):
@@ -1295,6 +1320,75 @@ def assistant_commands() -> list[dict[str, object]]:
 @app.get("/assistant/capabilities")
 def assistant_capabilities() -> list[dict[str, Any]]:
     return [capability.model_dump() for capability in CapabilityRegistry().list()]
+
+
+@app.post("/assistant/engineering/query")
+def assistant_engineering_query(payload: dict[str, Any]) -> dict[str, Any]:
+    request = _engineering_query_request(payload)
+    try:
+        result = _engineering_query_engine().execute(request)
+    except EngineeringQueryError as exc:
+        _raise_query_error(exc)
+    _engineering_query_store.save(request, result)
+    best_object = result.matched_objects[0].object_id if result.matched_objects else None
+    _intent_context_store.update(
+        {
+            "last_intent": "engineering.query",
+            "last_search_query": request.query,
+            "last_selected_node": best_object,
+            "current_task": "engineering.query",
+        }
+    )
+    return result.model_dump()
+
+
+@app.get("/assistant/engineering/query/latest")
+def assistant_engineering_query_latest() -> dict[str, Any]:
+    latest = _engineering_query_store.get_latest()
+    if latest is None:
+        raise HTTPException(status_code=404, detail="No engineering query result available.")
+    request, result = latest
+    return {"request": request.model_dump(), "result": result.model_dump()}
+
+
+@app.get("/assistant/engineering/query/types")
+def assistant_engineering_query_types() -> dict[str, Any]:
+    return {
+        "types": [
+            "OBJECT_SEARCH",
+            "RELATIONSHIPS",
+            "USAGE",
+            "DIAGNOSTICS",
+            "DOCUMENTS",
+            "ORPHANS",
+            "EXPLAIN_RELATIONSHIP",
+            "LIST_OBJECT_TYPE",
+            "UNKNOWN",
+        ],
+        "examples": [
+            "Wo wird Hydraulik verwendet?",
+            "Zeige verwaiste Objekte",
+            "Welche Diagnosen betreffen diese Datei?",
+        ],
+    }
+
+
+@app.get("/assistant/engineering/query/object/{object_id}")
+def assistant_engineering_query_object(object_id: str) -> dict[str, Any]:
+    try:
+        result = _engineering_query_engine().object_lookup(object_id)
+    except EngineeringQueryError as exc:
+        _raise_query_error(exc)
+    return result.model_dump()
+
+
+@app.get("/assistant/engineering/query/relationship/{relationship_id}/explain")
+def assistant_engineering_query_relationship_explain(relationship_id: str) -> dict[str, Any]:
+    try:
+        identifier = relationship_id if relationship_id.startswith("relationship:") else f"relationship:{relationship_id}"
+        return _engineering_query_engine().explain_relationship(identifier)
+    except EngineeringQueryError as exc:
+        _raise_query_error(exc)
 
 
 @app.post("/assistant/engineering/diagnostics/run")

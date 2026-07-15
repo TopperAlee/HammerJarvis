@@ -26,6 +26,10 @@ from app.logging_utils.audit import write_audit_log
 from app.tools.files.file_search_tool import get_file_search_status
 from app.tools.productivity.email_service import clean_email_snippet
 from app.tools.web.web_research_tool import format_web_research_answer
+from hammer_jarvis.query.engine import EngineeringQueryEngine, EngineeringQueryError
+from hammer_jarvis.query.models import EngineeringQueryRequest, EngineeringQueryType
+from hammer_jarvis.query.parser import EngineeringQueryParser
+from hammer_jarvis.understanding.engine import EngineeringUnderstandingEngine
 
 
 class AssistantOrchestrator:
@@ -59,6 +63,9 @@ class AssistantOrchestrator:
         action_response = self._handle_action_command(normalized)
         if action_response:
             return action_response
+        engineering_query_response = self._handle_engineering_query_command(message)
+        if engineering_query_response:
+            return engineering_query_response
         ha_allowlist_response = self._handle_home_assistant_allowlist_query(normalized)
         if ha_allowlist_response:
             return ha_allowlist_response
@@ -436,6 +443,41 @@ class AssistantOrchestrator:
                 "result": result,
             }
         return None
+
+    def _handle_engineering_query_command(self, original: str) -> dict[str, Any] | None:
+        parsed = EngineeringQueryParser().parse(original)
+        if parsed.query_type == EngineeringQueryType.UNKNOWN:
+            return None
+        try:
+            request = EngineeringQueryRequest(query=original)
+            engine = _engineering_query_engine_for_chat()
+            result = engine.execute(request)
+            _save_engineering_query_context(request, result)
+        except EngineeringQueryError as exc:
+            return {
+                "mode": "engineering_query",
+                "tool": "engineering.query",
+                "answer": str(exc),
+                "risk": ActionRisk.GREEN,
+                "result": {
+                    "query": original,
+                    "query_type": parsed.query_type.value,
+                    "status": "ERROR",
+                    "error_code": f"HTTP_{exc.status_code}",
+                    "statistics": {"read_only": True},
+                },
+            }
+        payload = result.model_dump()
+        return {
+            "mode": "engineering_query",
+            "tool": "engineering.query",
+            "answer": result.answer,
+            "risk": ActionRisk.GREEN,
+            "query_type": result.query_type.value,
+            "status": result.status,
+            "error_code": result.error_code,
+            "result": payload,
+        }
 
     def _handle_memory_command(self, original: str, normalized: str) -> dict[str, Any] | None:
         if _is_memory_store_command(normalized):
@@ -990,15 +1032,54 @@ def _is_file_create_intent(message: str) -> bool:
     )
 
 
+def _engineering_query_engine_for_chat() -> EngineeringQueryEngine:
+    import app.main as main_module
+
+    graph = main_module._understanding_source_graph()
+    if main_module._understanding_report is None:
+        report = EngineeringUnderstandingEngine().build(
+            graph,
+            diagnostics=main_module._diagnostic_report_store.get_latest(),
+            documents=main_module._document_store.list(),
+            knowledge_documents=main_module._knowledge_documents_for_understanding(),
+        )
+        main_module._understanding_report = report
+        main_module._understanding_object_store = main_module._build_understanding_object_store(graph, report)
+    return EngineeringQueryEngine(
+        graph=graph,
+        understanding=main_module._understanding_report,
+        objects=main_module._understanding_object_store,
+        diagnostics=main_module._diagnostic_report_store.get_latest(),
+        documents=main_module._document_store.list(),
+    )
+
+
+def _save_engineering_query_context(request: EngineeringQueryRequest, result: Any) -> None:
+    import app.main as main_module
+
+    main_module._engineering_query_store.save(request, result)
+    matches = getattr(result, "matched_objects", []) or []
+    best_object = matches[0].object_id if matches else None
+    main_module._intent_context_store.update(
+        {
+            "last_intent": "engineering.query",
+            "last_search_query": request.query,
+            "last_selected_node": best_object,
+            "current_task": "engineering.query",
+        }
+    )
+
+
 def _parse_home_assistant_action_intent(message: str) -> dict[str, str] | None:
     folded = _fold_german_text(message)
-    if _is_unsafe_home_assistant_action_text(folded):
-        return {"target": folded, "action": "blocked"}
     if "szene" in folded and any(term in folded for term in ("aktivieren", "aktiviere", "einschalten", "an")):
         target = _cleanup_home_assistant_target(folded, ("aktiviere", "aktivieren", "szene"))
         return {"target": target or folded, "action": "turn_on"}
-    if not any(term in folded for term in ("schalte", "mach", "licht", "steckdose")):
+    explicit_control_intent = any(term in folded for term in ("schalte", "mach", "licht", "steckdose"))
+    if not explicit_control_intent:
         return None
+    if _is_unsafe_home_assistant_action_text(folded):
+        return {"target": folded, "action": "blocked"}
     action = ""
     if any(term in folded for term in (" aus", "ausschalten", "mach aus", "licht aus", "steckdose aus")):
         action = "turn_off"

@@ -257,6 +257,17 @@ function bindElements() {
     "commandPaletteCommands",
     "activeContextList",
     "recommendationsList",
+    "engineeringCopilotCard",
+    "engineeringCopilotInput",
+    "engineeringCopilotButton",
+    "engineeringCopilotStatus",
+    "engineeringCopilotAnswer",
+    "engineeringCopilotObjects",
+    "engineeringCopilotRelationships",
+    "engineeringCopilotDiagnostics",
+    "engineeringCopilotDocuments",
+    "engineeringCopilotEvidence",
+    "engineeringCopilotRecommendations",
     "researchContextQuery",
     "researchSourceCount",
     "researchContextSize",
@@ -856,6 +867,67 @@ function renderResearchSource(source) {
 function renderEngineeringObject(object) {
   const source = object.source ? ` (${object.source})` : "";
   return `${object.type || "Object"}: ${object.name || object.id || "Engineering Object"}${source}`;
+}
+
+function clearEngineeringCopilotResult(status = "Noch keine Engineering-Frage ausgefÃ¼hrt.") {
+  setText("engineeringCopilotStatus", status);
+  setText("engineeringCopilotAnswer", "Keine Antwort.");
+  renderList(elements.engineeringCopilotObjects, [], () => "", "Keine Objekte.");
+  renderList(elements.engineeringCopilotRelationships, [], () => "", "Keine Beziehungen.");
+  renderList(elements.engineeringCopilotDiagnostics, [], () => "", "Keine Diagnosen.");
+  renderList(elements.engineeringCopilotDocuments, [], () => "", "Keine Dokumente.");
+  renderList(elements.engineeringCopilotEvidence, [], () => "", "Keine Evidence.");
+  renderList(elements.engineeringCopilotRecommendations, [], () => "", "Keine Empfehlungen.");
+}
+
+async function runEngineeringCopilotQuery() {
+  const query = text(elements.engineeringCopilotInput?.value, "").trim()
+    || text(elements.commandPaletteInput?.value, "").trim();
+  if (!query) {
+    clearEngineeringCopilotResult("Bitte eine Engineering-Frage eingeben.");
+    return;
+  }
+  clearEngineeringCopilotResult("Engineering Query laeuft...");
+  try {
+    const result = await postJson("/assistant/engineering/query", { query });
+    renderEngineeringCopilotResult(result);
+    await refreshCommandCenter();
+  } catch (error) {
+    clearEngineeringCopilotResult("Engineering Query konnte nicht ausgefuehrt werden.");
+  }
+}
+
+function renderEngineeringCopilotResult(result) {
+  setText("engineeringCopilotStatus", `Query-Typ: ${result.query_type || "UNKNOWN"}`);
+  setText("engineeringCopilotAnswer", result.answer || "Keine Antwort erzeugt.");
+  renderList(elements.engineeringCopilotObjects, result.matched_objects || [], renderEngineeringQueryMatch, "Keine Objekte.");
+  renderList(elements.engineeringCopilotRelationships, result.relationships || [], renderEngineeringQueryRelationship, "Keine Beziehungen.");
+  renderList(elements.engineeringCopilotDiagnostics, result.diagnostics || [], renderEngineeringQueryDiagnostic, "Keine Diagnosen.");
+  renderList(elements.engineeringCopilotDocuments, result.documents || [], renderEngineeringQueryDocument, "Keine Dokumente.");
+  renderList(elements.engineeringCopilotEvidence, result.explanations || [], renderEngineeringQueryEvidence, "Keine Evidence.");
+  renderList(elements.engineeringCopilotRecommendations, result.recommendations || [], (item) => item, "Keine Empfehlungen.");
+}
+
+function renderEngineeringQueryMatch(match) {
+  const source = match.source ? ` (${match.source})` : "";
+  return `${match.object_type || "Object"}: ${match.name || match.object_id || "-"}${source}`;
+}
+
+function renderEngineeringQueryRelationship(relationship) {
+  return `${relationship.direction || "relationship"} ${relationship.type || "-"}: ${relationship.source_id || "-"} -> ${relationship.target_id || "-"}`;
+}
+
+function renderEngineeringQueryDiagnostic(issue) {
+  const source = issue.source_file ? ` (${issue.source_file})` : "";
+  return `${issue.severity || "info"} ${issue.rule_id || "diagnostic"}: ${issue.title || ""}${source}`;
+}
+
+function renderEngineeringQueryDocument(document) {
+  return `${document.type || "Document"}: ${document.filename || document.id || "-"}`;
+}
+
+function renderEngineeringQueryEvidence(explanation) {
+  return `${explanation.relationship || "Beziehung"}: ${explanation.reason || "Evidence vorhanden."}`;
 }
 
 function appendCode(parent, value) {
@@ -4494,6 +4566,12 @@ function wireDashboardEvents() {
   elements.refreshPerformance.addEventListener("click", () => withButtonLoading(elements.refreshPerformance, "Messe...", refreshPerformance));
   elements.runOllamaBenchmark.addEventListener("click", () => withButtonLoading(elements.runOllamaBenchmark, "Benchmark...", runOllamaBenchmark));
   elements.researchAnswerButton?.addEventListener("click", () => withButtonLoading(elements.researchAnswerButton, "Baue Antwort...", buildResearchAnswer));
+  elements.engineeringCopilotButton?.addEventListener("click", () => withButtonLoading(elements.engineeringCopilotButton, "Frage...", runEngineeringCopilotQuery));
+  elements.engineeringCopilotInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      withButtonLoading(elements.engineeringCopilotButton, "Frage...", runEngineeringCopilotQuery);
+    }
+  });
   elements.syncHaEntities.addEventListener("click", () => withButtonLoading(elements.syncHaEntities, "Sync...", syncHaEntities));
   elements.haEntitySearchButton.addEventListener("click", () => withButtonLoading(elements.haEntitySearchButton, "Suche...", searchHaEntities));
   elements.haEntitySearchInput.addEventListener("keydown", (event) => {

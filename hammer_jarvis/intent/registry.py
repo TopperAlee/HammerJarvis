@@ -30,6 +30,31 @@ COMMANDS: list[dict[str, object]] = [
         "examples": ["diagnose starten", "projekt pruefen", "finde fehler"],
     },
     {
+        "intent": "engineering.query",
+        "label": "Engineering Copilot fragen",
+        "examples": ["Wo wird Hydraulik verwendet?", "Zeige verwaiste Objekte", "Welche Diagnosen betreffen diese Datei?"],
+    },
+    {
+        "intent": "engineering.object.relationships",
+        "label": "Engineering-Beziehungen anzeigen",
+        "examples": ["zeige Beziehungen", "welche Beziehungen hat Hydraulik"],
+    },
+    {
+        "intent": "engineering.object.diagnostics",
+        "label": "Engineering-Diagnosen anzeigen",
+        "examples": ["welche Diagnosen betreffen diese Datei", "Diagnosen zu Hydraulik"],
+    },
+    {
+        "intent": "engineering.object.documents",
+        "label": "Engineering-Dokumente anzeigen",
+        "examples": ["zeige Dokumente zum Projekt", "Dokumente zu MessageText"],
+    },
+    {
+        "intent": "engineering.object.orphans",
+        "label": "Verwaiste Objekte anzeigen",
+        "examples": ["zeige verwaiste Objekte"],
+    },
+    {
         "intent": "knowledge.search",
         "label": "Wissen suchen",
         "examples": ["knowledge", "suche dokument Hydraulik"],

@@ -8,6 +8,11 @@ class IntentParser:
         normalized = " ".join(text.strip().lower().split())
         active_context = context or {}
         rules: list[tuple[list[str], str, str]] = [
+            (["wo wird", "finde objekt", "engineering query"], "engineering.query", "Engineering-Query erkannt."),
+            (["zeige beziehungen", "welche beziehungen"], "engineering.object.relationships", "Engineering-Beziehungsfrage erkannt."),
+            (["welche diagnosen betreffen", "diagnosen betreffen", "diagnosen zu"], "engineering.object.diagnostics", "Engineering-Diagnosefrage erkannt."),
+            (["zeige dokumente zum projekt", "welche dokumente", "dokumente zu"], "engineering.object.documents", "Engineering-Dokumentfrage erkannt."),
+            (["zeige verwaiste objekte", "verwaiste objekte"], "engineering.object.orphans", "Engineering-Waisenobjekte erkannt."),
             (["diagnose starten", "projekt prÃ¼fen", "projekt pruefen", "engineering prÃ¼fen", "engineering pruefen", "finde fehler", "qualitÃ¤tsprÃ¼fung starten", "qualitaetspruefung starten"], "engineering.diagnostics.run", "Engineering-Diagnose erkannt."),
             (["git status"], "development.git.status", "Git-Status erkannt."),
             (["tests ausführen", "pytest"], "development.tests.run", "Testausführung erkannt."),
