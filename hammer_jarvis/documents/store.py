@@ -37,6 +37,9 @@ class DocumentStore:
     def get_content(self, document_id: str) -> DocumentContent | None:
         return self._contents.get(document_id)
 
+    def list(self) -> list[Document]:
+        return list(self._documents.values())
+
     def attach_to_graph(
         self,
         graph: EngineeringGraph,

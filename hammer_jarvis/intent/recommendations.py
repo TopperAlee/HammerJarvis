@@ -139,6 +139,19 @@ class RecommendationEngine:
                     )
                 )
 
+        if context.current_task == "engineering.understanding":
+            recommendations.append(
+                Recommendation(
+                    id="engineering.understanding_model_built",
+                    title="Engineering-Modell erfolgreich aufgebaut",
+                    message="Das lokale Engineering-Modell wurde aus vorhandenen Graph-, Diagnose-, Dokument- und Knowledge-Daten aufgebaut.",
+                    severity="info",
+                    source="engineering",
+                    intent="engineering.understanding.build",
+                    arguments={},
+                )
+            )
+
         if self._knowledge_empty:
             recommendations.append(
                 Recommendation(

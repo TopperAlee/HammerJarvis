@@ -82,6 +82,8 @@ from hammer_jarvis.research.answer_engine import AnswerEngine
 from hammer_jarvis.research.models import ResearchRequest
 from hammer_jarvis.research.orchestrator import ResearchOrchestrator
 from hammer_jarvis.research.sources import available_research_sources
+from hammer_jarvis.understanding.engine import EngineeringUnderstandingEngine
+from hammer_jarvis.understanding.models import EngineeringUnderstandingReport
 from hammer_jarvis.tools.protool.report import analyze_protool_csv
 
 
@@ -97,6 +99,8 @@ _protool_text_resource_store: dict[str, dict[str, Any]] = {}
 _intent_context_store = ContextStore()
 _diagnostic_report_store = DiagnosticReportStore()
 _document_store = DocumentStore()
+_understanding_report: EngineeringUnderstandingReport | None = None
+_understanding_object_store: dict[str, dict[str, Any]] = {}
 
 
 @app.on_event("startup")
@@ -391,6 +395,73 @@ def _validate_diagnostic_categories(categories: list[str]) -> list[str]:
     if invalid:
         raise HTTPException(status_code=400, detail=f"Invalid diagnostic category: {invalid[0]}")
     return normalized
+
+
+def _understanding_source_graph() -> EngineeringGraph:
+    project_id = _intent_context_store.get().active_project_id or "demo-project"
+    if project_id == "demo-project":
+        return _engineering_demo_graph("demo-project")
+    imported = _engineering_project_store.get(project_id)
+    if imported is None:
+        return _engineering_demo_graph("demo-project")
+    return imported.graph
+
+
+def _knowledge_documents_for_understanding() -> list[dict[str, Any]]:
+    try:
+        return KnowledgeStore().list_documents().get("documents", [])
+    except Exception:
+        return []
+
+
+def _build_understanding_object_store(
+    graph: EngineeringGraph,
+    report: EngineeringUnderstandingReport,
+) -> dict[str, dict[str, Any]]:
+    objects = {node.id: asdict(node) for node in graph.nodes}
+    diagnostics = _diagnostic_report_store.get_latest()
+    if diagnostics is not None:
+        for issue in diagnostics.issues:
+            objects[f"diagnostic:{issue.id}"] = {
+                "id": f"diagnostic:{issue.id}",
+                "type": "Diagnostic",
+                "name": issue.title,
+                "source_file": issue.source_file,
+                "source_line": issue.source_line,
+                "metadata": {
+                    "rule_id": issue.rule_id,
+                    "severity": issue.severity,
+                    "category": issue.category,
+                    "recommendation": issue.recommendation,
+                },
+            }
+    for document in _document_store.list():
+        objects[document.id] = {
+            "id": document.id,
+            "type": document.type,
+            "name": document.filename,
+            "source_file": document.filename,
+            "source_line": None,
+            "metadata": {
+                "mime_type": document.mime_type,
+                "size": document.size,
+                "modified_at": document.modified_at,
+            },
+        }
+    for item in _knowledge_documents_for_understanding():
+        object_id = str(item.get("document_id") or "")
+        if object_id:
+            objects[object_id] = {
+                "id": object_id,
+                "type": "KnowledgeReference",
+                "name": item.get("name") or Path(str(item.get("path") or "")).name or "Knowledge Reference",
+                "source_file": Path(str(item.get("path") or "")).name or None,
+                "source_line": None,
+                "metadata": {"source": "knowledge_store"},
+            }
+    for orphan in report.orphan_objects:
+        objects.setdefault(str(orphan.get("id")), orphan)
+    return objects
 
 
 class EntityActionRequest(BaseModel):
@@ -1288,6 +1359,54 @@ def assistant_engineering_diagnostics_issue(issue_id: str) -> dict[str, Any]:
     if issue is None:
         raise HTTPException(status_code=404, detail="Diagnostic issue not found.")
     return asdict(issue)
+
+
+@app.post("/assistant/engineering/understanding/build")
+def assistant_engineering_understanding_build() -> dict[str, Any]:
+    global _understanding_report, _understanding_object_store
+    graph = _understanding_source_graph()
+    report = EngineeringUnderstandingEngine().build(
+        graph,
+        diagnostics=_diagnostic_report_store.get_latest(),
+        documents=_document_store.list(),
+        knowledge_documents=_knowledge_documents_for_understanding(),
+    )
+    _understanding_report = report
+    _understanding_object_store = _build_understanding_object_store(graph, report)
+    _intent_context_store.update(
+        {
+            "current_task": "engineering.understanding",
+            "last_intent": "engineering.understanding.build",
+        }
+    )
+    return asdict(report)
+
+
+@app.get("/assistant/engineering/understanding")
+def assistant_engineering_understanding() -> dict[str, Any]:
+    if _understanding_report is None:
+        raise HTTPException(status_code=404, detail="No engineering understanding report available.")
+    return asdict(_understanding_report)
+
+
+@app.get("/assistant/engineering/relationships")
+def assistant_engineering_relationships() -> dict[str, Any]:
+    if _understanding_report is None:
+        raise HTTPException(status_code=404, detail="No engineering understanding report available.")
+    return {
+        "count": _understanding_report.relationship_count,
+        "relationships": [asdict(relationship) for relationship in _understanding_report.relationships],
+    }
+
+
+@app.get("/assistant/engineering/object/{object_id}")
+def assistant_engineering_object(object_id: str) -> dict[str, Any]:
+    if not _understanding_object_store:
+        raise HTTPException(status_code=404, detail="No engineering understanding object store available.")
+    item = _understanding_object_store.get(object_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Engineering object not found.")
+    return item
 
 
 @app.get("/assistant/engineering/modules")

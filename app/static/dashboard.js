@@ -1,4 +1,4 @@
-const DASHBOARD_BUILD = "document-intelligence-20260714";
+const DASHBOARD_BUILD = "engineering-understanding-20260715";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
 const fetchTimeoutMs = 15000;
@@ -294,6 +294,12 @@ function bindElements() {
     "diagnosticsSummary",
     "diagnosticsIssueDetails",
     "diagnosticsIssueTableBody",
+    "buildEngineeringUnderstanding",
+    "understandingStatus",
+    "understandingObjectCount",
+    "understandingRelationshipCount",
+    "understandingOrphanCount",
+    "understandingObjectTypes",
     "refreshActions",
     "pendingActions",
     "runWatchers",
@@ -3025,6 +3031,40 @@ function renderEngineeringDiagnosticIssue(issue) {
   return row;
 }
 
+async function buildEngineeringUnderstanding() {
+  clearEngineeringUnderstanding(false);
+  setText("understandingStatus", "Engineering-Modell wird aufgebaut...");
+  try {
+    const report = await postJson("/assistant/engineering/understanding/build", {});
+    renderEngineeringUnderstanding(report);
+    await refreshCommandCenter();
+  } catch (error) {
+    clearEngineeringUnderstanding(false);
+    setText("understandingStatus", "Engineering-Modell konnte nicht aufgebaut werden.");
+  }
+}
+
+function clearEngineeringUnderstanding(clearStatus = true) {
+  if (clearStatus) {
+    setText("understandingStatus", "Lokales Engineering-Modell aus vorhandenen Daten aufbauen.");
+  }
+  setText("understandingObjectCount", "-");
+  setText("understandingRelationshipCount", "-");
+  setText("understandingOrphanCount", "-");
+  setText("understandingObjectTypes", "-");
+}
+
+function renderEngineeringUnderstanding(report) {
+  setText("understandingStatus", report.summary || "Engineering-Modell aufgebaut.");
+  setText("understandingObjectCount", report.object_count ?? 0);
+  setText("understandingRelationshipCount", report.relationship_count ?? 0);
+  setText("understandingOrphanCount", (report.orphan_objects || []).length);
+  const objectTypes = Object.entries(report.object_types || {})
+    .map(([name, count]) => `${name}: ${count}`)
+    .join(", ");
+  setText("understandingObjectTypes", objectTypes || "-");
+}
+
 async function analyzeProToolCsv() {
   const filePath = text(elements.protoolFilePath?.value, "").trim();
   const textColumn = Number.parseInt(elements.protoolTextColumn?.value || "2", 10);
@@ -4531,6 +4571,7 @@ function wireDashboardEvents() {
   });
   elements.engineeringOpenProject?.addEventListener("click", () => withButtonLoading(elements.engineeringOpenProject, "Lade...", openEngineeringProject));
   elements.runEngineeringDiagnostics?.addEventListener("click", () => withButtonLoading(elements.runEngineeringDiagnostics, "Diagnose...", runEngineeringDiagnostics));
+  elements.buildEngineeringUnderstanding?.addEventListener("click", () => withButtonLoading(elements.buildEngineeringUnderstanding, "Baue...", buildEngineeringUnderstanding));
   elements.engineeringProjectPath?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       withButtonLoading(elements.engineeringOpenProject, "Lade...", openEngineeringProject);

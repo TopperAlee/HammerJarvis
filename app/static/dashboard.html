@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
-    <link rel="stylesheet" href="/static/dashboard.css?v=document-intelligence-20260714">
+    <link rel="stylesheet" href="/static/dashboard.css?v=engineering-understanding-20260715">
   </head>
   <body>
     <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
@@ -382,6 +382,31 @@
                     </table>
                   </div>
                 </section>
+                <section id="engineeringUnderstanding" class="engineering-diagnostics">
+                  <div class="panel-heading">
+                    <span>Engineering Understanding</span>
+                    <button id="buildEngineeringUnderstanding" class="ghost-button" type="button">Modell aufbauen</button>
+                  </div>
+                  <p id="understandingStatus" class="muted">Lokales Engineering-Modell aus vorhandenen Daten aufbauen.</p>
+                  <dl class="protool-summary">
+                    <div>
+                      <dt>Objekte</dt>
+                      <dd id="understandingObjectCount">-</dd>
+                    </div>
+                    <div>
+                      <dt>Beziehungen</dt>
+                      <dd id="understandingRelationshipCount">-</dd>
+                    </div>
+                    <div>
+                      <dt>Waisenobjekte</dt>
+                      <dd id="understandingOrphanCount">-</dd>
+                    </div>
+                    <div>
+                      <dt>Objektarten</dt>
+                      <dd id="understandingObjectTypes">-</dd>
+                    </div>
+                  </dl>
+                </section>
               </div>
               <aside class="engineering-properties" aria-label="Eigenschaften">
                 <h2>Eigenschaften</h2>
@@ -661,6 +686,6 @@
       </div>
     </div>
 
-    <script src="/static/dashboard.js?v=document-intelligence-20260714" defer></script>
+    <script src="/static/dashboard.js?v=engineering-understanding-20260715" defer></script>
   </body>
 </html>
