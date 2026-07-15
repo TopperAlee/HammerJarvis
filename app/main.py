@@ -65,6 +65,8 @@ from hammer_jarvis.engineering.importer.protool_importer import ProToolImporter
 from hammer_jarvis.engineering.plugins import get_engineering_modules
 from hammer_jarvis.engineering.scanner.filesystem import ProjectScanner
 from hammer_jarvis.engineering.tree import EngineeringTreeBuilder
+from hammer_jarvis.diagnostics.engine import DiagnosticEngine, DiagnosticReportStore, report_to_dict, validate_severity
+from hammer_jarvis.diagnostics.registry import DiagnosticRuleRegistry
 from hammer_jarvis.intent.capabilities import CapabilityRegistry
 from hammer_jarvis.intent.context import ContextStore
 from hammer_jarvis.intent.models import IntentRequest
@@ -88,6 +90,7 @@ _last_native_warm_benchmark: dict[str, Any] | None = None
 _engineering_project_store: dict[str, ImportedProject] = {}
 _protool_text_resource_store: dict[str, dict[str, Any]] = {}
 _intent_context_store = ContextStore()
+_diagnostic_report_store = DiagnosticReportStore()
 
 
 @app.on_event("startup")
@@ -199,6 +202,12 @@ class ResearchContextRequest(BaseModel):
     include_capabilities: bool = True
     include_documents: bool = True
     include_web: bool = False
+
+
+class EngineeringDiagnosticsRequest(BaseModel):
+    project_id: str | None = None
+    include_categories: list[str] = Field(default_factory=lambda: ["text", "graph", "project"])
+    severity_min: str = "info"
 
 
 class MissionRunRequest(BaseModel):
@@ -352,6 +361,25 @@ def _get_imported_project(project_id: str) -> ImportedProject:
     if imported is None:
         raise HTTPException(status_code=404, detail="Engineering project not found.")
     return imported
+
+
+def _diagnostics_graph(project_id: str | None) -> tuple[str, EngineeringGraph, dict[str, Any] | None]:
+    selected_project_id = project_id or _intent_context_store.get().active_project_id or "demo-project"
+    if selected_project_id == "demo-project":
+        return selected_project_id, _engineering_demo_graph("demo-project"), None
+    imported = _engineering_project_store.get(selected_project_id)
+    if imported is None:
+        raise HTTPException(status_code=404, detail="Engineering project not found.")
+    return selected_project_id, imported.graph, asdict(imported.project)
+
+
+def _validate_diagnostic_categories(categories: list[str]) -> list[str]:
+    allowed = {"text", "graph", "project"}
+    normalized = [category.strip().lower() for category in categories]
+    invalid = [category for category in normalized if category not in allowed]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid diagnostic category: {invalid[0]}")
+    return normalized
 
 
 class EntityActionRequest(BaseModel):
@@ -1097,6 +1125,70 @@ def assistant_commands() -> list[dict[str, object]]:
 @app.get("/assistant/capabilities")
 def assistant_capabilities() -> list[dict[str, Any]]:
     return [capability.model_dump() for capability in CapabilityRegistry().list()]
+
+
+@app.post("/assistant/engineering/diagnostics/run")
+def assistant_engineering_diagnostics_run(request: EngineeringDiagnosticsRequest) -> dict[str, Any]:
+    categories = _validate_diagnostic_categories(request.include_categories)
+    try:
+        severity = validate_severity(request.severity_min)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    project_id, graph, project = _diagnostics_graph(request.project_id)
+    report = DiagnosticEngine().run(
+        graph,
+        context=_intent_context_store.get().model_dump(),
+        project=project,
+        project_id=project_id,
+        include_categories=categories,
+        severity_min=severity,
+    )
+    _diagnostic_report_store.save(report)
+    _intent_context_store.update(
+        {
+            "current_task": "engineering.diagnostics",
+            "last_intent": "engineering.diagnostics.run",
+            "diagnostic_issue_count": report.issue_count,
+            "diagnostic_warning_count": report.warning_count,
+            "diagnostic_critical_count": report.critical_count,
+        }
+    )
+    return report_to_dict(report)
+
+
+@app.get("/assistant/engineering/diagnostics/latest")
+def assistant_engineering_diagnostics_latest() -> dict[str, Any]:
+    report = _diagnostic_report_store.get_latest()
+    if report is None:
+        raise HTTPException(status_code=404, detail="No diagnostic report available.")
+    return report_to_dict(report)
+
+
+@app.get("/assistant/engineering/diagnostics/rules")
+def assistant_engineering_diagnostics_rules() -> list[dict[str, Any]]:
+    return [
+        {
+            "rule_id": rule.rule_id,
+            "name": rule.name,
+            "category": rule.category,
+            "description": rule.description,
+            "default_severity": rule.default_severity,
+            "applicable_node_types": rule.applicable_node_types,
+            "enabled": rule.enabled,
+        }
+        for rule in DiagnosticRuleRegistry().list()
+    ]
+
+
+@app.get("/assistant/engineering/diagnostics/issues/{issue_id}")
+def assistant_engineering_diagnostics_issue(issue_id: str) -> dict[str, Any]:
+    report = _diagnostic_report_store.get_latest()
+    if report is None:
+        raise HTTPException(status_code=404, detail="No diagnostic report available.")
+    issue = next((item for item in report.issues if item.id == issue_id), None)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Diagnostic issue not found.")
+    return asdict(issue)
 
 
 @app.get("/assistant/engineering/modules")

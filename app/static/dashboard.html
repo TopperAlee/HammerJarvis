@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hammer Jarvis HUD</title>
-    <link rel="stylesheet" href="/static/dashboard.css?v=research-answer-engine-20260709">
+    <link rel="stylesheet" href="/static/dashboard.css?v=engineering-diagnostics-20260714">
   </head>
   <body>
     <!-- HAMMER JARVIS HUD DASHBOARD v2 -->
@@ -346,6 +346,42 @@
                   <h2>Arbeitsbereich</h2>
                   <p class="muted">Gemeinsame Plattform fuer zukuenftige Engineering-Module. ProTool bleibt als erstes read-only Modul angebunden.</p>
                 </div>
+                <section id="engineeringDiagnostics" class="engineering-diagnostics">
+                  <div class="panel-heading">
+                    <span>Diagnostics</span>
+                    <button id="runEngineeringDiagnostics" class="ghost-button" type="button">Diagnose starten</button>
+                  </div>
+                  <div class="control-row">
+                    <select id="diagnosticsSeverityFilter" aria-label="Severity Filter">
+                      <option value="info">Alle</option>
+                      <option value="warning">Warnung und kritisch</option>
+                      <option value="critical">Nur kritisch</option>
+                    </select>
+                    <select id="diagnosticsCategoryFilter" aria-label="Kategorie Filter">
+                      <option value="text,graph,project">Alle Kategorien</option>
+                      <option value="text">Text</option>
+                      <option value="graph">Graph</option>
+                      <option value="project">Projekt</option>
+                    </select>
+                  </div>
+                  <div id="diagnosticsSummary" class="counts">Gesamt: - | Kritisch: - | Warnungen: - | Hinweise: -</div>
+                  <div id="diagnosticsIssueDetails" class="muted">Issue-Details erscheinen nach Klick auf eine Tabellenzeile.</div>
+                  <div class="protool-table-wrap">
+                    <table class="protool-issues-table" aria-label="Engineering Diagnostics Issues">
+                      <thead>
+                        <tr>
+                          <th>Severity</th>
+                          <th>Regel</th>
+                          <th>Titel</th>
+                          <th>Datei</th>
+                          <th>Zeile</th>
+                          <th>Empfehlung</th>
+                        </tr>
+                      </thead>
+                      <tbody id="diagnosticsIssueTableBody"></tbody>
+                    </table>
+                  </div>
+                </section>
               </div>
               <aside class="engineering-properties" aria-label="Eigenschaften">
                 <h2>Eigenschaften</h2>
@@ -590,6 +626,6 @@
       </div>
     </div>
 
-    <script src="/static/dashboard.js?v=research-answer-engine-20260709" defer></script>
+    <script src="/static/dashboard.js?v=engineering-diagnostics-20260714" defer></script>
   </body>
 </html>

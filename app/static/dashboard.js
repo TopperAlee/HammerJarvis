@@ -1,4 +1,4 @@
-const DASHBOARD_BUILD = "research-answer-engine-20260709";
+const DASHBOARD_BUILD = "engineering-diagnostics-20260714";
 const refreshMs = 30000;
 const entityCatalogRefreshMs = 60000;
 const fetchTimeoutMs = 15000;
@@ -279,6 +279,12 @@ function bindElements() {
     "engineeringOpenProject",
     "engineeringProjectStatus",
     "engineeringProjectExplorer",
+    "runEngineeringDiagnostics",
+    "diagnosticsSeverityFilter",
+    "diagnosticsCategoryFilter",
+    "diagnosticsSummary",
+    "diagnosticsIssueDetails",
+    "diagnosticsIssueTableBody",
     "refreshActions",
     "pendingActions",
     "runWatchers",
@@ -2886,6 +2892,71 @@ function renderEngineeringTreeNode(node) {
   return item;
 }
 
+async function runEngineeringDiagnostics() {
+  const severity = elements.diagnosticsSeverityFilter?.value || "info";
+  const categories = text(elements.diagnosticsCategoryFilter?.value, "text,graph,project")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  try {
+    const report = await postJson("/assistant/engineering/diagnostics/run", {
+      include_categories: categories,
+      severity_min: severity,
+    });
+    renderEngineeringDiagnostics(report);
+    await refreshCommandCenter();
+  } catch (error) {
+    setText("diagnosticsSummary", "Diagnose konnte nicht ausgeführt werden.");
+    clearEngineeringDiagnosticsDetails();
+  }
+}
+
+function clearEngineeringDiagnosticsDetails() {
+  if (elements.diagnosticsIssueTableBody) {
+    elements.diagnosticsIssueTableBody.textContent = "";
+  }
+  setText("diagnosticsIssueDetails", "Keine Details ausgewählt.");
+}
+
+function renderEngineeringDiagnostics(report) {
+  setText(
+    "diagnosticsSummary",
+    `Gesamt: ${report.issue_count ?? 0} | Kritisch: ${report.critical_count ?? 0} | Warnungen: ${report.warning_count ?? 0} | Hinweise: ${report.info_count ?? 0}`,
+  );
+  setText("diagnosticsIssueDetails", "Keine Details ausgewählt.");
+  if (!elements.diagnosticsIssueTableBody) {
+    return;
+  }
+  elements.diagnosticsIssueTableBody.textContent = "";
+  for (const issue of report.issues || []) {
+    elements.diagnosticsIssueTableBody.appendChild(renderEngineeringDiagnosticIssue(issue));
+  }
+}
+
+function renderEngineeringDiagnosticIssue(issue) {
+  const row = document.createElement("tr");
+  const values = [
+    issue.severity,
+    issue.rule_id,
+    issue.title,
+    issue.source_file,
+    issue.source_line,
+    issue.recommendation,
+  ];
+  for (const value of values) {
+    const cell = document.createElement("td");
+    cell.textContent = text(value, "");
+    row.appendChild(cell);
+  }
+  row.addEventListener("click", () => {
+    setText(
+      "diagnosticsIssueDetails",
+      `${issue.rule_id}: ${JSON.stringify(issue.evidence || {})}`,
+    );
+  });
+  return row;
+}
+
 async function analyzeProToolCsv() {
   const filePath = text(elements.protoolFilePath?.value, "").trim();
   const textColumn = Number.parseInt(elements.protoolTextColumn?.value || "2", 10);
@@ -4385,6 +4456,7 @@ function wireDashboardEvents() {
     }
   });
   elements.engineeringOpenProject?.addEventListener("click", () => withButtonLoading(elements.engineeringOpenProject, "Lade...", openEngineeringProject));
+  elements.runEngineeringDiagnostics?.addEventListener("click", () => withButtonLoading(elements.runEngineeringDiagnostics, "Diagnose...", runEngineeringDiagnostics));
   elements.engineeringProjectPath?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       withButtonLoading(elements.engineeringOpenProject, "Lade...", openEngineeringProject);

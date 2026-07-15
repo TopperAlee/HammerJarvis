@@ -68,6 +68,19 @@ CAPABILITIES = [
         read_only=True,
     ),
     Capability(
+        id="engineering.diagnostics.run",
+        name="Engineering Diagnostics Engine",
+        module="engineering",
+        plugin="diagnostics",
+        status="implemented",
+        implemented_since="v0.9.0",
+        gui_available=True,
+        api_available=True,
+        voice_ready=False,
+        risk_level="GREEN",
+        read_only=True,
+    ),
+    Capability(
         id="knowledge.search",
         name="Knowledge Search",
         module="knowledge",
@@ -115,4 +128,3 @@ class CapabilityRegistry:
 
     def get(self, capability_id: str) -> Capability | None:
         return next((capability.model_copy() for capability in CAPABILITIES if capability.id == capability_id), None)
-

@@ -25,6 +25,11 @@ COMMANDS: list[dict[str, object]] = [
         "examples": ["panel preview", "panel vorschau"],
     },
     {
+        "intent": "engineering.diagnostics.run",
+        "label": "Engineering-Diagnose starten",
+        "examples": ["diagnose starten", "projekt pruefen", "finde fehler"],
+    },
+    {
         "intent": "knowledge.search",
         "label": "Wissen suchen",
         "examples": ["knowledge", "suche dokument Hydraulik"],
@@ -54,4 +59,3 @@ COMMANDS: list[dict[str, object]] = [
 
 def get_commands() -> list[dict[str, object]]:
     return [command.copy() for command in COMMANDS]
-

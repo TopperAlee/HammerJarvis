@@ -98,6 +98,47 @@ class RecommendationEngine:
                 )
             )
 
+        if context.current_task == "engineering.diagnostics":
+            critical = context.diagnostic_critical_count or 0
+            warnings = context.diagnostic_warning_count or 0
+            total = context.diagnostic_issue_count or 0
+            if critical > 0:
+                recommendations.append(
+                    Recommendation(
+                        id="engineering.diagnostics_review_critical",
+                        title="Kritische Engineering-Probleme prüfen",
+                        message=f"Die letzte Diagnose hat {critical} kritische Auffälligkeit(en) gefunden.",
+                        severity="critical",
+                        source="engineering",
+                        intent="engineering.diagnostics.run",
+                        arguments={},
+                    )
+                )
+            elif warnings > 0:
+                recommendations.append(
+                    Recommendation(
+                        id="engineering.diagnostics_review_warnings",
+                        title="Engineering-Warnungen prüfen",
+                        message=f"Die letzte Diagnose hat {warnings} Warnung(en) gefunden.",
+                        severity="warning",
+                        source="engineering",
+                        intent="engineering.diagnostics.run",
+                        arguments={},
+                    )
+                )
+            elif total == 0:
+                recommendations.append(
+                    Recommendation(
+                        id="engineering.diagnostics_no_issues",
+                        title="Keine diagnostischen Auffälligkeiten gefunden",
+                        message="Die letzte Engineering-Diagnose hat keine Issues gemeldet.",
+                        severity="info",
+                        source="engineering",
+                        intent="engineering.diagnostics.run",
+                        arguments={},
+                    )
+                )
+
         if self._knowledge_empty:
             recommendations.append(
                 Recommendation(

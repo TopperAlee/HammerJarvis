@@ -47,4 +47,7 @@ class ContextState(BaseModel):
     last_search_query: str | None = None
     last_selected_node: str | None = None
     current_task: str | None = None
+    diagnostic_issue_count: int | None = None
+    diagnostic_warning_count: int | None = None
+    diagnostic_critical_count: int | None = None
     updated_at: str | None = None

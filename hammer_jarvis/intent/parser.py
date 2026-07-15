@@ -8,6 +8,7 @@ class IntentParser:
         normalized = " ".join(text.strip().lower().split())
         active_context = context or {}
         rules: list[tuple[list[str], str, str]] = [
+            (["diagnose starten", "projekt prÃ¼fen", "projekt pruefen", "engineering prÃ¼fen", "engineering pruefen", "finde fehler", "qualitÃ¤tsprÃ¼fung starten", "qualitaetspruefung starten"], "engineering.diagnostics.run", "Engineering-Diagnose erkannt."),
             (["git status"], "development.git.status", "Git-Status erkannt."),
             (["tests ausführen", "pytest"], "development.tests.run", "Testausführung erkannt."),
             (["analysiere protool", "csv analysieren"], "engineering.protool.analyze", "ProTool-Analyse erkannt."),
@@ -41,4 +42,3 @@ class IntentParser:
             risk="GREEN",
             message="Ich konnte den Befehl nicht eindeutig einem bekannten Intent zuordnen.",
         )
-
